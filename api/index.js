@@ -1,11 +1,10 @@
 const express = require('express');
 const cors = require('cors');
-const ytdl = require('ytdl-core-muxer'); // Multi-platform support
+const ytdl = require('ytdl-core'); // Stable ytdl-core use ho raha hai
 const ffmpeg = require('fluent-ffmpeg');
-const ffmpegPath = require('ffmpeg-static'); // FFmpeg binary path
-const { PassThrough } = require('stream');
+const ffmpegPath = require('ffmpeg-static');
 
-// FFmpeg path ko set karna taaki fluent-ffmpeg use kar sake
+// FFmpeg path ko set karna
 if (ffmpegPath) {
     ffmpeg.setFfmpegPath(ffmpegPath);
 }
@@ -14,32 +13,38 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// 1. Health Check Route
+// 1. Health Check
 app.get('/', (req, res) => {
-    res.send('✅ Video Downloader Backend is Running!');
+    res.send('✅ Final Video Downloader Backend is Running!');
 });
 
-// 2. Fetch Video Information (Multi-platform & Quality Support)
+// 2. Fetch Video Information (Quality and MP3 Support)
 app.post('/api/fetch-info', async (req, res) => {
     const { url } = req.body;
 
     if (!url) {
         return res.status(400).json({ error: 'Video URL is required.' });
     }
+    
+    // ytdl-core sirf YouTube links ko support karta hai.
+    // Agar future mein dusre platforms chahiye, to alag paid service ya yt-dlp binary use karna padega.
+    if (!ytdl.validateURL(url)) {
+         return res.status(400).json({ error: 'Kripya ek valid YouTube URL daalein. (Is version mein sirf YouTube supported hai)' });
+    }
 
     try {
         const info = await ytdl.getInfo(url);
         
-        // Video and Audio formats filter karna
-        let formats = ytdl.filterFormats(info.formats, 'videoandaudio')
-            .filter(f => f.qualityLabel && f.container === 'mp4')
-            .sort((a, b) => b.height - a.height);
+        // Formats filter karna: sirf video+audio formats ko mp4 container mein nikalna
+        let formats = info.formats
+            .filter(f => f.qualityLabel && f.container === 'mp4' && f.hasVideo && f.hasAudio)
+            .sort((a, b) => b.height - a.height); // Highest quality pehle
 
         // Formats list taiyar karna
         const finalFormats = formats.map(f => ({
             quality: f.qualityLabel,
             container: f.container,
-            itag: f.itag,
+            itag: f.itag, // Download ke liye zaruri
             contentLength: f.contentLength ? (parseInt(f.contentLength) / (1024 * 1024)).toFixed(2) + ' MB' : 'Unknown Size'
         }));
 
@@ -92,7 +97,7 @@ app.get('/api/download', async (req, res) => {
                 .on('error', (err) => {
                     console.error('FFmpeg MP3 Error:', err.message);
                     if (!res.headersSent) {
-                        res.status(500).end('MP3 conversion mein galti ho gayi. FFmpeg configuration check karein.');
+                        res.status(500).end('MP3 conversion mein galti ho gayi.');
                     }
                 })
                 .pipe(res, { end: true });
@@ -104,8 +109,8 @@ app.get('/api/download', async (req, res) => {
 
             // Video aur audio ko merge karke stream karna
             const videoStream = ytdl(url, { 
-                filter: 'videoandaudio',
-                quality: itag
+                filter: format => format.itag == itag && format.hasVideo && format.hasAudio, // Specific itag ko filter karein
+                quality: 'highestvideo' // Fallback
             });
 
             videoStream.pipe(res);
