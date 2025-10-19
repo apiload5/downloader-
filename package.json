@@ -1,7 +1,7 @@
 {
   "name": "downloader",
   "version": "1.0.0",
-  "description": "Multi-platform video downloader backend in Node.js",
+  "description": "Multi-platform video downloader backend in Node.js with Vercel/Cloud setup.",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
@@ -11,7 +11,8 @@
     "nodejs",
     "downloader",
     "vercel",
-    "ytdl-core"
+    "youtube",
+    "facebook"
   ],
   "author": "",
   "license": "ISC",
@@ -19,7 +20,7 @@
     "cors": "^2.8.5",
     "express": "^4.18.2",
     "fluent-ffmpeg": "^2.1.2",
+    "ffmpeg-static": "^5.2.0",  
     "ytdl-core-muxer": "^2.0.1"
-    // Yahan koi comma nahi hona chahiye! ⬆️
   }
 }
