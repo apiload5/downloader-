@@ -19,6 +19,6 @@
     "cors": "^2.8.5",
     "express": "^4.18.2",
     "fluent-ffmpeg": "^2.1.2",
-    "ytdl-core-muxer": "^2.0.1"  <-- Naya package
+    "ytdl-core-muxer": "^2.0.1"  <-- Dhyan dein: Is line ke baad comma nahi hai!
   }
 }
