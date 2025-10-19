@@ -1,0 +1,24 @@
+{
+  "name": "video-downloader-backend",
+  "version": "1.0.0",
+  "description": "Multi-platform video downloader backend in Node.js",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  },
+  "keywords": [
+    "nodejs",
+    "downloader",
+    "vercel",
+    "yt-dlp"
+  ],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.18.2",
+    "fluent-ffmpeg": "^2.1.2",
+    "yt-dlp-core": "^1.1.0"
+  }
+}
