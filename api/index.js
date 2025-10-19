@@ -1,10 +1,10 @@
 const express = require('express');
 const cors = require('cors');
-const ytdl = require('ytdl-core'); // Stable ytdl-core use ho raha hai
+const ytdl = require('ytdl-core');
 const ffmpeg = require('fluent-ffmpeg');
 const ffmpegPath = require('ffmpeg-static');
 
-// FFmpeg path ko set karna
+// FFmpeg path ko set karna, jo streaming aur MP3 conversion ke liye zaruri hai
 if (ffmpegPath) {
     ffmpeg.setFfmpegPath(ffmpegPath);
 }
@@ -13,12 +13,20 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// 1. Health Check
+// 1. Root Health Check Route
+// Yeh Vercel ki root URL https://downloader5.vercel.app/ par respond karega
 app.get('/', (req, res) => {
-    res.send('✅ Final Video Downloader Backend is Running!');
+    res.send('✅ Vercel Root Backend is Running Successfully!');
 });
 
-// 2. Fetch Video Information (Quality and MP3 Support)
+// 2. API Health Check Route (Fixing the "Cannot GET /api" issue)
+// Jab Vercel Express app ko mount karta hai, toh yeh route /api/ par respond karega
+app.get('/api', (req, res) => {
+    res.send('✅ Vercel API Endpoint is Running Successfully!');
+});
+
+// 3. Fetch Video Information Route
+// URL: https://downloader5.vercel.app/api/fetch-info (POST)
 app.post('/api/fetch-info', async (req, res) => {
     const { url } = req.body;
 
@@ -26,25 +34,22 @@ app.post('/api/fetch-info', async (req, res) => {
         return res.status(400).json({ error: 'Video URL is required.' });
     }
     
-    // ytdl-core sirf YouTube links ko support karta hai.
-    // Agar future mein dusre platforms chahiye, to alag paid service ya yt-dlp binary use karna padega.
     if (!ytdl.validateURL(url)) {
-         return res.status(400).json({ error: 'Kripya ek valid YouTube URL daalein. (Is version mein sirf YouTube supported hai)' });
+         return res.status(400).json({ error: 'Kripya ek valid YouTube URL daalein. (Currently only YouTube is fully supported)' });
     }
 
     try {
         const info = await ytdl.getInfo(url);
         
-        // Formats filter karna: sirf video+audio formats ko mp4 container mein nikalna
+        // Filter: Video aur Audio dono ho, container mp4 ho
         let formats = info.formats
             .filter(f => f.qualityLabel && f.container === 'mp4' && f.hasVideo && f.hasAudio)
             .sort((a, b) => b.height - a.height); // Highest quality pehle
 
-        // Formats list taiyar karna
         const finalFormats = formats.map(f => ({
             quality: f.qualityLabel,
             container: f.container,
-            itag: f.itag, // Download ke liye zaruri
+            itag: f.itag,
             contentLength: f.contentLength ? (parseInt(f.contentLength) / (1024 * 1024)).toFixed(2) + ' MB' : 'Unknown Size'
         }));
 
@@ -52,7 +57,7 @@ app.post('/api/fetch-info', async (req, res) => {
         finalFormats.push({
             quality: 'MP3 (Audio Only)',
             container: 'mp3',
-            itag: 'bestaudio', // MP3 ke liye special ID
+            itag: 'bestaudio',
             contentLength: 'Varies'
         });
 
@@ -70,7 +75,8 @@ app.post('/api/fetch-info', async (req, res) => {
     }
 });
 
-// 3. Video Download Route (Streaming)
+// 4. Video Download Route
+// URL: https://downloader5.vercel.app/api/download (GET)
 app.get('/api/download', async (req, res) => {
     const { url, itag, quality, title = 'video' } = req.query;
 
@@ -82,14 +88,12 @@ app.get('/api/download', async (req, res) => {
 
     try {
         if (itag === 'bestaudio') {
-            // --- MP3 Conversion Logic ---
+            // --- MP3 Conversion Logic (using FFmpeg) ---
             res.header('Content-Disposition', `attachment; filename="${cleanTitle}_audio.mp3"`);
             res.header('Content-Type', 'audio/mpeg');
 
-            // ytdl se best audio stream nikalna
             const audioStream = ytdl(url, { filter: 'audioonly' });
 
-            // FFmpeg se audio ko MP3 mein convert karke stream karna
             ffmpeg(audioStream)
                 .noVideo()
                 .audioCodec('libmp3lame')
@@ -97,20 +101,19 @@ app.get('/api/download', async (req, res) => {
                 .on('error', (err) => {
                     console.error('FFmpeg MP3 Error:', err.message);
                     if (!res.headersSent) {
-                        res.status(500).end('MP3 conversion mein galti ho gayi.');
+                        res.status(500).end('MP3 conversion mein galti ho gayi. FFmpeg configuration check karein.');
                     }
                 })
                 .pipe(res, { end: true });
 
         } else {
-            // --- Standard Video Download Logic (Video + Audio) ---
+            // --- Standard Video Download Logic ---
             res.header('Content-Disposition', `attachment; filename="${cleanTitle}_${quality.replace(/\s/g, '_')}.mp4"`);
             res.header('Content-Type', 'video/mp4');
 
-            // Video aur audio ko merge karke stream karna
             const videoStream = ytdl(url, { 
-                filter: format => format.itag == itag && format.hasVideo && format.hasAudio, // Specific itag ko filter karein
-                quality: 'highestvideo' // Fallback
+                filter: format => format.itag == itag && format.hasVideo && format.hasAudio,
+                quality: 'highestvideo' 
             });
 
             videoStream.pipe(res);
