@@ -1,5 +1,5 @@
 {
-  "name": "downloader",
+  "name": "video-downloader-backend",
   "version": "1.0.0",
   "description": "Multi-platform video downloader backend in Node.js with Vercel/Cloud setup.",
   "main": "server.js",
@@ -11,8 +11,7 @@
     "nodejs",
     "downloader",
     "vercel",
-    "youtube",
-    "facebook"
+    "youtube"
   ],
   "author": "",
   "license": "ISC",
@@ -21,6 +20,6 @@
     "express": "^4.18.2",
     "fluent-ffmpeg": "^2.1.2",
     "ffmpeg-static": "^5.2.0",  
-    "ytdl-core-muxer": "^2.0.1"
+    "ytdl-core": "^4.11.5"  <-- Final aur Stable Package
   }
 }
