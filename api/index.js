@@ -1,18 +1,25 @@
 const express = require('express');
 const cors = require('cors');
-const ytdl = require('ytdl-core-muxer'); // Nayi aur stable library
+const ytdl = require('ytdl-core-muxer'); // Multi-platform support
 const ffmpeg = require('fluent-ffmpeg');
+const ffmpegPath = require('ffmpeg-static'); // FFmpeg binary path
+const { PassThrough } = require('stream');
+
+// FFmpeg path ko set karna taaki fluent-ffmpeg use kar sake
+if (ffmpegPath) {
+    ffmpeg.setFfmpegPath(ffmpegPath);
+}
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 
-// 1. Health Check
+// 1. Health Check Route
 app.get('/', (req, res) => {
-    res.send('Node.js Multi-Platform Downloader Backend is Running Successfully (Fixed)!');
+    res.send('✅ Video Downloader Backend is Running!');
 });
 
-// 2. Fetch Video Information 
+// 2. Fetch Video Information (Multi-platform & Quality Support)
 app.post('/api/fetch-info', async (req, res) => {
     const { url } = req.body;
 
@@ -23,10 +30,10 @@ app.post('/api/fetch-info', async (req, res) => {
     try {
         const info = await ytdl.getInfo(url);
         
-        // ytdl-core-muxer mein formats ko filter aur map karna
+        // Video and Audio formats filter karna
         let formats = ytdl.filterFormats(info.formats, 'videoandaudio')
-            .filter(f => f.qualityLabel && f.container === 'mp4') // MP4 container aur quality label waale formats
-            .sort((a, b) => b.height - a.height); // Highest resolution pehle
+            .filter(f => f.qualityLabel && f.container === 'mp4')
+            .sort((a, b) => b.height - a.height);
 
         // Formats list taiyar karna
         const finalFormats = formats.map(f => ({
@@ -40,7 +47,7 @@ app.post('/api/fetch-info', async (req, res) => {
         finalFormats.push({
             quality: 'MP3 (Audio Only)',
             container: 'mp3',
-            itag: 'bestaudio', // MP3 ke liye ek special ID
+            itag: 'bestaudio', // MP3 ke liye special ID
             contentLength: 'Varies'
         });
 
@@ -70,7 +77,7 @@ app.get('/api/download', async (req, res) => {
 
     try {
         if (itag === 'bestaudio') {
-            // --- MP3 Conversion Logic using FFmpeg ---
+            // --- MP3 Conversion Logic ---
             res.header('Content-Disposition', `attachment; filename="${cleanTitle}_audio.mp3"`);
             res.header('Content-Type', 'audio/mpeg');
 
@@ -79,26 +86,26 @@ app.get('/api/download', async (req, res) => {
 
             // FFmpeg se audio ko MP3 mein convert karke stream karna
             ffmpeg(audioStream)
-                .noVideo() // Sirf audio chahiye
+                .noVideo()
                 .audioCodec('libmp3lame')
                 .format('mp3')
                 .on('error', (err) => {
                     console.error('FFmpeg MP3 Error:', err.message);
                     if (!res.headersSent) {
-                        res.status(500).end('MP3 conversion mein galti ho gayi. (FFmpeg missing?)');
+                        res.status(500).end('MP3 conversion mein galti ho gayi. FFmpeg configuration check karein.');
                     }
                 })
                 .pipe(res, { end: true });
 
         } else {
             // --- Standard Video Download Logic (Video + Audio) ---
-            res.header('Content-Disposition', `attachment; filename="${cleanTitle}_${quality}.mp4"`);
+            res.header('Content-Disposition', `attachment; filename="${cleanTitle}_${quality.replace(/\s/g, '_')}.mp4"`);
             res.header('Content-Type', 'video/mp4');
 
             // Video aur audio ko merge karke stream karna
             const videoStream = ytdl(url, { 
-                filter: 'videoandaudio', // Video aur audio dono chahiye
-                quality: itag // Specific itag quality
+                filter: 'videoandaudio',
+                quality: itag
             });
 
             videoStream.pipe(res);
