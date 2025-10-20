@@ -1,13 +1,18 @@
 const express = require('express');
-const cors = require('cors');
+const cors = require = require('cors');
 const ytdl = require('ytdl-core');
-const ffmpeg = require('fluent-ffmpeg');
-const ffmpegPath = require('ffmpeg-static');
 
-// FFmpeg path ko set karna, jo streaming aur MP3 conversion ke liye zaruri hai
-if (ffmpegPath) {
-    ffmpeg.setFfmpegPath(ffmpegPath);
+// ⚠️ FFmpeg/ffmpeg-static FIX
+const ffmpeg = require('fluent-ffmpeg');
+const ffmpegStatic = require('ffmpeg-static'); // Variable name change
+
+// Vercel mein static path set karna zaruri hai
+if (ffmpegStatic) {
+    ffmpeg.setFfmpegPath(ffmpegStatic);
 }
+
+const app = express();
+// ... (Baki code wahi rahega)
 
 const app = express();
 app.use(cors());
