@@ -13,7 +13,7 @@ Create a requirements.txt file with the provided content
 
 Configure Replit
 
-In the Replit shell,** run: pip install -r requirements.txt *"
+In the Replit shell,## run: pip install -r requirements.txt ##
 
 Set environment variables if needed
 
