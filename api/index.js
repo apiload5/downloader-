@@ -1,55 +1,48 @@
 const express = require('express');
-const cors = require = require('cors');
+const cors = require('cors');
 const ytdl = require('ytdl-core');
 
-// ⚠️ FFmpeg/ffmpeg-static FIX
+// ⚠️ FFmpeg dependencies ka load aur path set karna zaroori hai
 const ffmpeg = require('fluent-ffmpeg');
-const ffmpegStatic = require('ffmpeg-static'); // Variable name change
+const ffmpegStatic = require('ffmpeg-static');
 
-// Vercel mein static path set karna zaruri hai
+// Vercel serverless environment ke liye FFmpeg binary ka path set karein.
 if (ffmpegStatic) {
     ffmpeg.setFfmpegPath(ffmpegStatic);
 }
-
-const app = express();
-// ... (Baki code wahi rahega)
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 
 // 1. Root Health Check Route
-// Yeh Vercel ki root URL https://downloader5.vercel.app/ par respond karega
+// URL: https://downloader5.vercel.app/
 app.get('/', (req, res) => {
     res.send('✅ Vercel Root Backend is Running Successfully!');
 });
 
-// 2. API Health Check Route (Fixing the "Cannot GET /api" issue)
-// Jab Vercel Express app ko mount karta hai, toh yeh route /api/ par respond karega
+// 2. API Health Check Route (Fixes the Cannot GET /api error)
+// URL: https://downloader5.vercel.app/api
 app.get('/api', (req, res) => {
     res.send('✅ Vercel API Endpoint is Running Successfully!');
 });
 
 // 3. Fetch Video Information Route
-// URL: https://downloader5.vercel.app/api/fetch-info (POST)
+// Method: POST | URL: /api/fetch-info
 app.post('/api/fetch-info', async (req, res) => {
     const { url } = req.body;
 
-    if (!url) {
-        return res.status(400).json({ error: 'Video URL is required.' });
-    }
-    
-    if (!ytdl.validateURL(url)) {
-         return res.status(400).json({ error: 'Kripya ek valid YouTube URL daalein. (Currently only YouTube is fully supported)' });
+    if (!url || !ytdl.validateURL(url)) {
+        return res.status(400).json({ error: 'Kripya ek valid YouTube URL daalein.' });
     }
 
     try {
         const info = await ytdl.getInfo(url);
         
-        // Filter: Video aur Audio dono ho, container mp4 ho
+        // Filter and sort video formats (only MP4 with video and audio)
         let formats = info.formats
             .filter(f => f.qualityLabel && f.container === 'mp4' && f.hasVideo && f.hasAudio)
-            .sort((a, b) => b.height - a.height); // Highest quality pehle
+            .sort((a, b) => b.height - a.height);
 
         const finalFormats = formats.map(f => ({
             quality: f.qualityLabel,
@@ -58,7 +51,7 @@ app.post('/api/fetch-info', async (req, res) => {
             contentLength: f.contentLength ? (parseInt(f.contentLength) / (1024 * 1024)).toFixed(2) + ' MB' : 'Unknown Size'
         }));
 
-        // MP3 (Audio Only) option add karna
+        // Add MP3 (Audio Only) option
         finalFormats.push({
             quality: 'MP3 (Audio Only)',
             container: 'mp3',
@@ -76,12 +69,12 @@ app.post('/api/fetch-info', async (req, res) => {
 
     } catch (error) {
         console.error('Error fetching video info:', error.message);
-        res.status(500).json({ error: 'Video information nahi mil payi. Kripya URL check karein.' });
+        res.status(500).json({ error: 'Video information nahi mil payi. URL ya video ki availability check karein.' });
     }
 });
 
 // 4. Video Download Route
-// URL: https://downloader5.vercel.app/api/download (GET)
+// Method: GET | URL: /api/download
 app.get('/api/download', async (req, res) => {
     const { url, itag, quality, title = 'video' } = req.query;
 
@@ -89,6 +82,7 @@ app.get('/api/download', async (req, res) => {
         return res.status(400).send('Video URL aur Format ID (itag) zaruri hai.');
     }
     
+    // File name ko safe banane ke liye cleaning
     const cleanTitle = title.replace(/[^\w\s-]/g, '').trim(); 
 
     try {
@@ -106,13 +100,13 @@ app.get('/api/download', async (req, res) => {
                 .on('error', (err) => {
                     console.error('FFmpeg MP3 Error:', err.message);
                     if (!res.headersSent) {
-                        res.status(500).end('MP3 conversion mein galti ho gayi. FFmpeg configuration check karein.');
+                        res.status(500).end('MP3 conversion mein galti ho gayi. (Check Vercel Logs)');
                     }
                 })
                 .pipe(res, { end: true });
 
         } else {
-            // --- Standard Video Download Logic ---
+            // --- Standard Video Download Logic (MP4) ---
             res.header('Content-Disposition', `attachment; filename="${cleanTitle}_${quality.replace(/\s/g, '_')}.mp4"`);
             res.header('Content-Type', 'video/mp4');
 
@@ -126,7 +120,7 @@ app.get('/api/download', async (req, res) => {
             videoStream.on('error', (err) => {
                 console.error('Download Stream Error:', err.message);
                 if (!res.headersSent) {
-                    res.status(500).end('Video download mein galti ho gayi.');
+                    res.status(500).end('Video download stream mein galti ho gayi.');
                 }
             });
         }
@@ -134,9 +128,10 @@ app.get('/api/download', async (req, res) => {
     } catch (error) {
         console.error('General Download Error:', error.message);
         if (!res.headersSent) {
-            res.status(500).send('Unexpected error during download.');
+            res.status(500).send('Unexpected error during download processing.');
         }
     }
 });
 
+// Express app ko Vercel ke liye export karna
 module.exports = app;
