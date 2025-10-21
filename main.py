@@ -1,7 +1,4 @@
-# main.py - FINAL PROFESSIONAL AND CLOUD-READY VERSION
-
-# --- 1. Imports and Configuration ---
-from flask import Flask, request, jsonify, send_file
+# from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
 import yt_dlp
 import os
@@ -29,12 +26,23 @@ SUPPORTED_PLATFORMS = [
 ]
 
 # --- 2. Flask App Setup ---
+# *** YAHAN PAR CORS CONFIGURATION KI JAGA HAI ***
+
+# --- APKE ALLOWED DOMAINS ---
+ALLOWED_ORIGINS = [
+    "https://www.adm.com",     # Production domain 1
+    "https://adm.net",         # Production domain 2
+    "http://localhost:3000",   # Local frontend testing ke liye (agar zaroori ho)
+    "http://127.0.0.1:5000"    # Agar aap backend ko direct access kar rahe hain
+]
+# ----------------------------
+
 app = Flask(__name__)
-# Enable CORS for all origins, required for frontend
-CORS(app) 
+# CORS ko sirf ALLOWED_ORIGINS par restrict karein
+CORS(app, resources={r"/api/*": {"origins": ALLOWED_ORIGINS}}) 
+
 # Set max content length to prevent huge JSON/Form uploads (security)
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024 # 16 MB limit
-
 # --- 3. Downloader Class (Advanced Logic) ---
 class CloudVideoDownloader:
     def __init__(self):
