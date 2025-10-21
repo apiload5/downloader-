@@ -30,8 +30,8 @@ SUPPORTED_PLATFORMS = [
 
 # --- APKE ALLOWED DOMAINS ---
 ALLOWED_ORIGINS = [
-    "https://www.adm.com",     # Production domain 1
-    "https://adm.net",         # Production domain 2
+    "https://crispy0921.blogspot.com",     # Production domain 1
+    "https://reqbin.com",         # Production domain 2
     "http://localhost:3000",   # Local frontend testing ke liye (agar zaroori ho)
     "http://127.0.0.1:5000"    # Agar aap backend ko direct access kar rahe hain
 ]
