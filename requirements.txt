@@ -1,5 +1,30 @@
-# requirements.txt
-Flask
-Flask-Cors
-yt-dlp
-gunicorn  # To run the app in production
+# Complete Production Stack - Python 3.13
+# Web Framework
+Flask==3.0.0
+Werkzeug==3.0.1
+Jinja2==3.1.2
+
+# Security & CORS
+Flask-CORS==4.0.0
+Flask-Limiter==3.5.0
+blinker==1.7.0
+
+# Video Processing
+yt-dlp==2024.11.18
+
+# HTTP & Networking
+requests==2.31.0
+urllib3==2.0.7
+charset-normalizer==3.3.2
+
+# Production Server
+gunicorn==22.0.0
+gevent==24.2.1
+
+# Environment & Config
+python-dotenv==1.0.0
+click==8.1.7
+
+# Utilities
+colorama==0.4.6
+tqdm==4.66.1
