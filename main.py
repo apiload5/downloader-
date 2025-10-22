@@ -249,4 +249,4 @@ if __name__ == '__main__':
         logger.error(f"FATAL: FFmpeg binary not found at {FFMPEG_PATH}. Please follow step 1.")
     else:
         logger.info("FFmpeg binary found and integrated.")
-    app.run(host='0.0.0.0', port=os.environ.get('PORT', 5000), debug=True)
+    app.run(host='0.0.0.0', port=os.environ.get('PORT', 8080), debug=True)
