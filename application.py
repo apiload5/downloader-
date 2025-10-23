@@ -12,31 +12,32 @@ import shutil
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-app = Flask(__name__)
+# --- AWS Elastic Beanstalk Configuration ---
+# Beanstalk par, 'application' naam zaroori hai
+application = Flask(__name__) 
 
 # --- SECURITY CONFIGURATION: CORS ---
-ALLOWED_ORIGIN = "https://crispy0921.blogspot.com"
-CORS(app, origins=[ALLOWED_ORIGIN])
+# Apne production domain se badal len
+ALLOWED_ORIGIN = "https://crispy0921.blogspot.com" 
+CORS(application, origins=[ALLOWED_ORIGIN])
 # ---
 
 # --- Quality Configuration ---
 ALLOWED_VIDEO_QUALITIES = [1080, 720, 480, 360, 240, 144]
 
-# --- FFmpeg Path: The path to the static binary we placed in the 'bin' folder ---
-FFMPEG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'bin', 'ffmpeg')
-
-class UniversalDownloaderFixed:
+class UniversalDownloader:
     def __init__(self):
-        # Now we tell yt-dlp where to find the external FFmpeg
+        # YDL options. ffmpeg_location yahan se hata diya gaya hai.
+        # Kyunki Beanstalk FFmpeg ko system wide install karega (jise yt-dlp khud dhoond lega).
         self.ydl_opts = {
             'quiet': False,
             'no_warnings': False,
             'external_downloader_args': ['-movflags', 'faststart'],
-            # IMPORTANT: Set the path to the FFmpeg binary!
-            'ffmpeg_location': FFMPEG_PATH 
+            'postprocessors': [],
+            # FFmpeg_location ko system path par chhod diya gaya hai (best practice for AWS)
         }
     
-    # --- (Validation and Search methods remain UNCHANGED) ---
+    # --- URL Validation and Search methods are UNCHANGED ---
     def validate_url(self, url):
         """Validate if URL is supported by yt-dlp"""
         if not url or not isinstance(url, str):
@@ -77,7 +78,7 @@ class UniversalDownloaderFixed:
             logger.error(f"Search failed: {e}")
             return []
 
-    
+
     def get_video_info(self, url):
         """Get video information and generate download links for all required qualities"""
         try:
@@ -102,32 +103,31 @@ class UniversalDownloaderFixed:
                     'formats': [],
                 }
                 
-                # --- Format Generation Logic (Re-enabling Merging) ---
+                # --- Format Generation (Now relies on FFmpeg for merging) ---
                 video_formats = []
                 
                 for height in sorted(ALLOWED_VIDEO_QUALITIES, reverse=True):
                     
-                    # COMPLEX FORMAT STRING FOR MERGING (Requires FFmpeg)
-                    # bestvideo[height<=H][ext=mp4] + bestaudio[ext=m4a]/best[height<=H]
+                    # COMPLEX FORMAT STRING FOR MERGING (Requires FFmpeg, which Beanstalk will install)
+                    # This ensures high quality video and audio merging into MP4.
                     format_string = f"bestvideo[height<={height}][ext=mp4]+bestaudio[ext=m4a]/{height}p/best[height<={height}]"
                     
                     custom_id = f'{height}p_mp4_merged'
                     
                     video_formats.append({
                         'id': custom_id,
-                        # Now we can promise Video + Audio
                         'name': f'Video + Audio ({height}p MP4)', 
                         'format_id': format_string, 
                         'quality': f'{height}p',
                         'ext': 'mp4',
-                        'size': 'Estimating...', # Size is hard to estimate before merging
+                        'size': 'Estimating...',
                     })
                         
                 # 2. Audio Only (MP3 Conversion is now possible!)
                 audio_format = {
                     'id': 'bestaudio_mp3_converted',
                     'name': 'Audio Only (MP3 - High Quality)',
-                    'format_id': 'bestaudio/best', # Use the actual ytdlp audio format string
+                    'format_id': 'bestaudio/best', # Actual ytdlp audio format string
                     'quality': 'Audio',
                     'size': 'Estimating...',
                     'ext': 'mp3' 
@@ -141,7 +141,7 @@ class UniversalDownloaderFixed:
             raise Exception(f"Could not fetch video info: {str(e)}")
 
     def download_video(self, url, format_id):
-        """Download video/audio using FFmpeg for merging and conversion"""
+        """Download video/audio using system FFmpeg for merging and conversion"""
         filepath = None
         temp_dir = tempfile.gettempdir()
         
@@ -156,13 +156,13 @@ class UniversalDownloaderFixed:
                 'outtmpl': os.path.join(temp_dir, filename_base + '.%(ext)s'),
                 'format': format_id,
                 'postprocessors': [],
-                'merge_output_format': 'mp4', # Default merge to MP4
+                'merge_output_format': 'mp4', 
             })
             
             # 1. Audio Conversion to MP3
             if is_audio_conversion:
                 ydl_opts.update({
-                    # Use FFmpeg to convert to MP3
+                    # Use FFmpeg system tool to convert to MP3
                     'postprocessors': [{
                         'key': 'FFmpegExtractAudio',
                         'preferredcodec': 'mp3',
@@ -173,7 +173,7 @@ class UniversalDownloaderFixed:
             
             # 2. Video with Merging (FFmpeg required)
             else:
-                # Ensure the merge output is MP4
+                # Ensures merged output is MP4
                 ydl_opts['postprocessors'].append(
                     {'key': 'FFmpegVideoConvertor', 'preferedformat': 'mp4'}
                 )
@@ -187,7 +187,6 @@ class UniversalDownloaderFixed:
             # --- Find the final file ---
             download_ext = 'mp3' if is_audio_conversion else 'mp4'
             
-            # Find the downloaded file based on the base name and expected extension
             downloaded_file = None
             for f in os.listdir(temp_dir):
                 if f.startswith(filename_base) and f.endswith(f'.{download_ext}'):
@@ -195,7 +194,7 @@ class UniversalDownloaderFixed:
                     break
             
             if not downloaded_file or not os.path.exists(downloaded_file):
-                raise Exception("Downloaded file not found. Check FFmpeg path and permissions.")
+                raise Exception("Downloaded file not found. Check if FFmpeg installed correctly on the system.")
 
             filepath = downloaded_file
             if os.path.getsize(filepath) == 0:
@@ -210,9 +209,9 @@ class UniversalDownloaderFixed:
                     os.remove(filepath)
                 except:
                     pass
-            # Provide an error if FFmpeg failed to run
-            if 'ffprobe' in str(e) or 'ffmpeg' in str(e):
-                 raise Exception(f"Download failed: FFmpeg execution error. Check if '{FFMPEG_PATH}' exists and has executable permission (chmod +x).")
+            # Specific error if FFmpeg dependency is missing
+            if 'ffmpeg not found' in str(e) or 'FFmpeg' in str(e) and ('extract audio' in str(e) or 'merge' in str(e)):
+                 raise Exception(f"Download failed: FFmpeg execution error. Check if the .ebextensions script installed FFmpeg correctly.")
             
             raise Exception(f"Download failed: {str(e)}")
             
@@ -223,30 +222,114 @@ class UniversalDownloaderFixed:
         seconds = seconds % 60
         return f"{minutes}:{seconds:02d}"
 
+
 # Initialize downloader
-downloader = UniversalDownloaderFixed()
+downloader = UniversalDownloader()
 
-# --- ROUTES (Remain the same) ---
+# --- ROUTES ---
 
-@app.route('/')
+@application.route('/')
 def home():
     return jsonify({
-        'message': 'Universal Downloader API (FFmpeg Static Binary)',
+        'message': 'Universal Downloader API (SaveFrom/Y2Mate Style)',
         'status': 'running',
         'security': f'Only accessible from {ALLOWED_ORIGIN}',
         'supported_sites': '1000+ sites (via yt-dlp)',
-        'note': f'FFmpeg is integrated from: {FFMPEG_PATH}. All qualities should now include audio.',
+        'note': 'FFmpeg is installed via .ebextensions, so all qualities should now include audio.',
         'available_endpoints': ['/api/info', '/api/download', '/api/search']
     })
 
-# (Rest of the /api/info, /api/download, and /api/search routes remain UNCHANGED)
+@application.route('/api/info', methods=['POST'])
+@cross_origin(origins=[ALLOWED_ORIGIN])
+def get_video_info_route():
+    try:
+        data = request.get_json() or {}
+        url = data.get('url', '').strip()
+        
+        if not url:
+            return jsonify({'error': 'URL is required'}), 400
+        
+        if not downloader.validate_url(url):
+            return jsonify({
+                'error': 'URL not supported',
+                'message': 'This website is not supported by the downloader',
+            }), 400
+        
+        video_info = downloader.get_video_info(url)
+        return jsonify(video_info)
+        
+    except Exception as e:
+        logger.error(f"Info error: {e}")
+        return jsonify({'error': str(e)}), 500
 
-# --- (The route definitions are omitted for brevity but should be included in your final code) ---
+@application.route('/api/download', methods=['POST'])
+@cross_origin(origins=[ALLOWED_ORIGIN])
+def download_video_route():
+    filepath = None
+    try:
+        data = request.get_json() or {}
+        url = data.get('url', '').strip()
+        format_id = data.get('format_id', '')
+        
+        if not url or not format_id:
+            return jsonify({'error': 'URL and format_id are required'}), 400
+        
+        filepath = downloader.download_video(url, format_id)
+        
+        # Determine filename and MIME type
+        if 'audio' in format_id:
+            filename = "download.mp3"
+            mimetype = 'audio/mpeg'
+        else:
+             # Use video title if available, otherwise generic
+             title = downloader.get_video_info(url).get('title', 'video')
+             safe_title = re.sub(r'[^\w\-_\.]', '_', title)[:50]
+             filename = f"{safe_title}.mp4"
+             mimetype = 'video/mp4'
+        
+        response = send_file(
+            filepath,
+            as_attachment=True,
+            download_name=filename,
+            mimetype=mimetype
+        )
+        
+        @response.call_on_close
+        def cleanup():
+            try:
+                if filepath and os.path.exists(filepath):
+                    os.remove(filepath)
+            except:
+                pass
+        
+        return response
+        
+    except Exception as e:
+        logger.error(f"Download error: {e}")
+        if filepath and os.path.exists(filepath):
+            try:
+                os.remove(filepath)
+            except:
+                pass
+        return jsonify({'error': str(e)}), 500
+
+@application.route('/api/search', methods=['POST'])
+@cross_origin(origins=[ALLOWED_ORIGIN])
+def search_videos_route():
+    try:
+        data = request.get_json() or {}
+        query = data.get('query', '').strip()
+        
+        if not query:
+            return jsonify({'error': 'Search query is required'}), 400
+            
+        results = downloader.search_videos(query)
+        
+        return jsonify({'results': results})
+        
+    except Exception as e:
+        logger.error(f"Search error: {e}")
+        return jsonify({'error': str(e)}), 500
+
 if __name__ == '__main__':
-    logger.info("🚀 Universal Downloader Started (FFmpeg Static Binary Mode)")
-    # Check if the binary exists on startup
-    if not os.path.exists(FFMPEG_PATH):
-        logger.error(f"FATAL: FFmpeg binary not found at {FFMPEG_PATH}. Please follow step 1.")
-    else:
-        logger.info("FFmpeg binary found and integrated.")
-    app.run(host='0.0.0.0', port=os.environ.get('PORT', 8080), debug=True)
+    application.run(host='0.0.0.0', port=os.environ.get('PORT', 8080), debug=True)
