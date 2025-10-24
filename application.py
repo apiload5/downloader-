@@ -22,16 +22,6 @@ app = Flask(__name__)
 application = app
 
 # --- SECURITY: CORS CONFIGURATION ---
-ALLOWED_ORIGINS = [
-    # 1.  naya aur main secure frontend domain (Recommended)
-    "https://savemedia.online",
-    
-    # 2.  naya secure backend subdomain (agar direct request aati hai)
-    "https://backend.savemedia.online",
-    
-    # 3. Purana Blogger domain (Agar abhi bhi test kar rahe hain)
-    "https://crispy0921.blogspot.com"
-]
 
 # Allow all specified origins
 CORS(app, origins=ALLOWED_ORIGINS, supports_credentials=True)
