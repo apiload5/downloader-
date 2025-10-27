@@ -6,8 +6,8 @@ import tempfile
 import uuid
 import logging
 import re
-import shutil
-import functools # Import for functools.wraps
+import math 
+import shutil # For safely handling file renaming across different file systems
 
 # Configuration
 logging.basicConfig(level=logging.INFO)
@@ -16,79 +16,201 @@ logger = logging.getLogger(__name__)
 app = Flask(__name__)
 
 # --- SECURITY CONFIGURATION: CORS ---
-# NOTE: Replace with your actual domain if you deploy this!
+# صرف اس ڈومین کو اجازت ہے
 ALLOWED_ORIGIN = "https://crispy0921.blogspot.com"
-# Allow CORS for the specified origin
 CORS(app, origins=[ALLOWED_ORIGIN])
 # ---
 
 # --- Quality Configuration ---
 ALLOWED_VIDEO_QUALITIES = [1080, 720, 480, 360, 240, 144]
 
-# --- FFmpeg Path: The path to the static binary we placed in the 'bin' folder ---
-# This assumes the 'bin/ffmpeg' file is in the same directory as this script.
-FFMPEG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'bin', 'ffmpeg')
-
-# --- Helper for Temporary Directory Cleanup ---
-def cleanup_file(filepath):
-    """Helper function to safely remove a file."""
-    if filepath and os.path.exists(filepath):
-        try:
-            # Check if it's not a directory and is a file before attempting to unlink
-            if os.path.isfile(filepath):
-                os.unlink(filepath)
-                logger.info(f"Cleaned up file: {filepath}")
-        except Exception as e:
-            logger.error(f"Error cleaning up file {filepath}: {e}")
-
 class UniversalDownloaderFixed:
     def __init__(self):
-        # We tell yt-dlp where to find the external FFmpeg
         self.ydl_opts = {
             'quiet': False,
             'no_warnings': False,
-            'external_downloader_args': ['-movflags', 'faststart'],
-            # IMPORTANT: Set the path to the FFmpeg binary!
-            'ffmpeg_location': FFMPEG_PATH 
         }
     
-    def _format_duration(self, seconds):
-        """Helper to format duration in seconds to M:SS format."""
-        if not seconds or not isinstance(seconds, (int, float)): return "Unknown"
-        minutes = int(seconds) // 60
-        seconds = int(seconds) % 60
-        return f"{minutes}:{seconds:02d}"
-
     def validate_url(self, url):
         """Validate if URL is supported by yt-dlp"""
         if not url or not isinstance(url, str):
             return False
         try:
             with yt_dlp.YoutubeDL(self.ydl_opts) as ydl:
-                # Use download=False, process=False for a fast check
                 ydl.extract_info(url, download=False, process=False)
                 return True
         except:
             return False
     
+    def get_video_info(self, url):
+        """Get video information and generate download links for all required qualities"""
+        try:
+            logger.info(f"Fetching info for: {url}")
+            
+            ydl_opts = {
+                'quiet': True,
+                'no_warnings': True,
+                'extract_flat': False,
+            }
+            
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(url, download=False)
+                
+                if not info:
+                    raise Exception("Video not found or inaccessible")
+                
+                video_data = {
+                    'success': True,
+                    'title': info.get('title', 'Unknown Title'),
+                    'thumbnail': info.get('thumbnail', ''),
+                    'extractor': info.get('extractor', 'Unknown Platform'),
+                    'formats': [],
+                }
+                
+                # --- Format Generation Logic (Fixed for No FFmpeg) ---
+                
+                video_formats = []
+                # 1. Video + Audio (MP4) Formats
+                for height in sorted(ALLOWED_VIDEO_QUALITIES, reverse=True):
+                    
+                    # New Simplified Format String: Prioritizes combined streams
+                    # 1. best[height<=H][ext=mp4] -> Looks for a single MP4 stream with audio (Works up to ~480p)
+                    # 2. bestvideo[height<=H][ext=mp4] -> Fallback: Video Only stream
+                    # We remove the merge string to avoid the explicit FFmpeg error.
+                    format_string = f"best[height<={height}][ext=mp4]/{height}p/bestvideo[height<={height}][ext=mp4]"
+                    
+                    # We use a custom format ID that includes the height for front-end clarity
+                    custom_id = f'{height}p_mp4'
+                    
+                    video_formats.append({
+                        'id': custom_id,
+                        'name': f'Video + Audio (Max {height}p MP4)',
+                        'format_id': format_string, # Send the simple format string to download
+                        'quality': f'{height}p',
+                        'ext': 'mp4',
+                        'size': 'Estimating...', 
+                    })
+                        
+                # 2. Audio Only (MP3 Placeholder) Format
+                audio_format = {
+                    'id': 'bestaudio_mp3',
+                    'name': 'Audio Only (MP3 - Good Quality)',
+                    'format_id': 'bestaudio/best', # Actual ytdlp audio format string
+                    'quality': 'Audio',
+                    'size': 'Estimating...',
+                    'ext': 'mp3' 
+                }
+
+                # Prepare final lists
+                video_data['formats'] = video_formats + [audio_format]
+                
+                return video_data
+                
+        except Exception as e:
+            logger.error(f"Info extraction failed: {e}")
+            raise Exception(f"Could not fetch video info: {str(e)}")
+
+    def download_video(self, url, format_id):
+        """Download video/audio using the simplified format string"""
+        filepath = None
+        temp_dir = tempfile.gettempdir()
+        
+        try:
+            file_id = uuid.uuid4().hex
+            filename_base = f"download_{file_id}"
+            
+            is_audio_download = (format_id == 'bestaudio/best')
+
+            ydl_opts = {
+                'outtmpl': os.path.join(temp_dir, filename_base + '.%(ext)s'),
+                'format': format_id,
+                'postprocessors': [],
+                # IMPORTANT: Set merge_output_format to 'webm' to prevent unwanted FFmpeg merge calls
+                'merge_output_format': 'webm', 
+            }
+            
+            # 1. Audio-only download
+            if is_audio_download:
+                # We allow yt-dlp to download the file with its original extension (.m4a/.opus)
+                pass 
+            
+            # 2. Video with Audio/Video Only
+            else:
+                # Force the output template to MP4 to ensure a consistent file name for later renaming/finding
+                ydl_opts['outtmpl'] = os.path.join(temp_dir, filename_base + '.mp4')
+            
+            logger.info(f"Starting download: {url} with format: {format_id}")
+            
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                ydl.download([url])
+            
+            # --- Find and Rename Logic (Updated for stability) ---
+            
+            # Find the downloaded file based on the base name
+            downloaded_file = None
+            for f in os.listdir(temp_dir):
+                if f.startswith(filename_base) and not f.endswith('.part'):
+                    downloaded_file = os.path.join(temp_dir, f)
+                    break
+            
+            if not downloaded_file or not os.path.exists(downloaded_file):
+                raise Exception("Downloaded file not found. Try a lower quality.")
+
+            # Final file path and renaming logic
+            filepath = downloaded_file
+            
+            if is_audio_download:
+                # Rename the downloaded audio file (e.g., .m4a) to .mp3
+                final_name = f"{filename_base}.mp3"
+                final_path = os.path.join(temp_dir, final_name)
+                # Use shutil.move for reliable rename across filesystems
+                shutil.move(downloaded_file, final_path)
+                filepath = final_path
+            
+            elif not downloaded_file.endswith('.mp4'):
+                # Rename downloaded video (e.g., .webm) to .mp4 for consistency
+                 final_name = f"{filename_base}.mp4"
+                 final_path = os.path.join(temp_dir, final_name)
+                 shutil.move(downloaded_file, final_path)
+                 filepath = final_path
+
+
+            if os.path.getsize(filepath) == 0:
+                raise Exception("Downloaded file is empty")
+            
+            logger.info(f"Download completed: {filepath}")
+            return filepath
+            
+        except Exception as e:
+            if filepath and os.path.exists(filepath):
+                try:
+                    os.remove(filepath)
+                except:
+                    pass
+            # Clearer message on high-res failure due to no FFmpeg
+            if 'bestvideo' in format_id and 'bestaudio' not in format_id:
+                 raise Exception(f"Download failed (No Audio): For this high quality, the video stream contains no audio. You must use a tool like FFmpeg to combine the audio, or choose a 480p/360p option.")
+            
+            raise Exception(f"Video Download failed: {str(e)}")
+            
+    # --- Search Functionality (Same as before) ---
     def search_videos(self, query):
         """Search videos on YouTube using yt-dlp's search functionality"""
         try:
-            if not query: return []
-            # Make a copy of ydl_opts to add search-specific options
-            ydl_opts = self.ydl_opts.copy()
-            ydl_opts.update({
+            if not query:
+                return []
+            ydl_opts = {
                 'quiet': True,
-                'default_search': 'ytsearch10', # Search and return up to 10 results
-                'extract_flat': 'in_playlist',  # Get info quickly without downloading
-            })
+                'no_warnings': True,
+                'default_search': 'ytsearch10', 
+                'extract_flat': 'in_playlist',
+            }
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 info = ydl.extract_info(f"ytsearch10:{query}", download=False)
                 results = []
                 if info and 'entries' in info:
                     for entry in info['entries']:
-                        # Skip entries that are None or lack essential info
-                        if entry and entry.get('url') and entry.get('id'):
+                        if entry:
                             results.append({
                                 'title': entry.get('title', 'Unknown Title'),
                                 'url': entry.get('url', entry.get('webpage_url')),
@@ -102,174 +224,19 @@ class UniversalDownloaderFixed:
             logger.error(f"Search failed: {e}")
             return []
 
-    
-    def get_video_info(self, url):
-        """Get video information and generate download links for all required qualities"""
-        try:
-            logger.info(f"Fetching info for: {url}")
-            
-            ydl_opts = self.ydl_opts.copy()
-            ydl_opts.update({
-                'quiet': True,
-                'extract_flat': False, # Need full details for formats
-            })
-            
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(url, download=False)
-                if not info:
-                    raise Exception("Video not found or inaccessible")
-                
-                # Check for playlist/multi-entry (handle single video only for this API)
-                if info.get('_type') == 'playlist' or 'entries' in info:
-                    # For simplicity, extract the first entry if it's a playlist/multi-video
-                    if 'entries' in info and info['entries']:
-                         info = info['entries'][0]
-                    # If it's a playlist without entries, raise an error
-                    elif info.get('_type') == 'playlist':
-                        raise Exception("Playlists are not supported. Please use a direct video URL.")
-                
-                video_data = {
-                    'success': True,
-                    'title': info.get('title', 'Unknown Title'),
-                    'thumbnail': info.get('thumbnail', ''),
-                    'extractor': info.get('extractor', 'Unknown Platform'),
-                    'duration': self._format_duration(info.get('duration')),
-                    'uploader': info.get('uploader', 'N/A'),
-                    'formats': [],
-                }
-                
-                video_formats = []
-                
-                # 1. Video + Audio Merged (Requires FFmpeg)
-                for height in sorted(ALLOWED_VIDEO_QUALITIES, reverse=True):
-                    
-                    # FORMAT STRING: Use "bestvideo[height<=H][ext=mp4]+bestaudio[ext=m4a]" 
-                    # If that fails, fallback to 'best[height<=H]' which might be single stream
-                    format_string = f"bestvideo[height<={height}][ext=mp4]+bestaudio[ext=m4a]/best[height<={height}]"
-                    
-                    # The format ID passed to the download route must be the raw format string
-                    video_formats.append({
-                        'id': f'{height}p_mp4_merged',
-                        'name': f'Video + Audio ({height}p MP4)', 
-                        'format_id': format_string, 
-                        'quality': f'{height}p',
-                        'ext': 'mp4',
-                        'size': 'Estimating...', # Size is hard to estimate before merging
-                    })
-                        
-                # 2. Audio Only (MP3 Conversion is now possible!)
-                # NOTE: The 'format_id' here is what yt-dlp uses to SELECT the audio, 
-                # but the download method handles the conversion to MP3 via postprocessor.
-                audio_format = {
-                    'id': 'bestaudio_mp3_converted',
-                    'name': 'Audio Only (MP3 - High Quality)',
-                    'format_id': 'bestaudio/best', 
-                    'quality': 'Audio',
-                    'size': 'Estimating...',
-                    'ext': 'mp3' 
-                }
+    def _format_duration(self, seconds):
+        if not seconds: return "Unknown"
+        minutes = seconds // 60
+        seconds = seconds % 60
+        return f"{minutes}:{seconds:02d}"
 
-                video_data['formats'] = video_formats + [audio_format]
-                return video_data
-                
-        except Exception as e:
-            logger.error(f"Info extraction failed: {e}")
-            # Re-raise a more descriptive error for the API response
-            raise Exception(f"Could not fetch video info: {str(e)}")
-
-    def download_video(self, url, format_id):
-        """Download video/audio using FFmpeg for merging and conversion"""
-        filepath = None
-        temp_dir = tempfile.gettempdir()
-        
-        # Use a unique temporary directory to isolate files and ensure easier cleanup
-        # This is a good practice to prevent conflicts in a shared temp directory.
-        download_temp_dir = os.path.join(temp_dir, uuid.uuid4().hex)
-        os.makedirs(download_temp_dir, exist_ok=True)
-        
-        try:
-            filename_base = "media" # A generic base name for output file
-            
-            # Determine if we're doing audio conversion
-            is_audio_conversion = ('bestaudio/best' in format_id or 'audio' in format_id)
-
-            ydl_opts = self.ydl_opts.copy()
-            ydl_opts.update({
-                'outtmpl': os.path.join(download_temp_dir, filename_base + '.%(ext)s'),
-                'format': format_id,
-                'postprocessors': [],
-                'merge_output_format': 'mp4', 
-            })
-            
-            # 1. Audio Conversion to MP3
-            if is_audio_conversion:
-                ydl_opts.update({
-                    # Use FFmpeg to convert to MP3
-                    'postprocessors': [{
-                        'key': 'FFmpegExtractAudio',
-                        'preferredcodec': 'mp3',
-                        'preferredquality': '192', # High quality MP3
-                    }],
-                    # The outtmpl must match the postprocessor's output extension
-                    'outtmpl': os.path.join(download_temp_dir, filename_base + '.mp3'),
-                })
-                download_ext = 'mp3'
-            
-            # 2. Video with Merging (FFmpeg required)
-            else:
-                # Ensure the merge output is MP4 (default)
-                ydl_opts['postprocessors'].append(
-                    {'key': 'FFmpegVideoConvertor', 'preferedformat': 'mp4'}
-                )
-                ydl_opts['outtmpl'] = os.path.join(download_temp_dir, filename_base + '.mp4')
-                # Add postprocessor for 'faststart' if not using external_downloader_args
-                # The external_downloader_args in __init__ already covers faststart, 
-                # but adding a separate post-processor for clarity/robustness:
-                ydl_opts['postprocessors'].append({'key': 'FFmpegMetadata', 'add_metadata': False})
-                
-                download_ext = 'mp4'
-            
-            logger.info(f"Starting download: {url} with format: {format_id}")
-            
-            # --- Perform Download ---
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                # yt-dlp returns a status code. This might be useful for debugging.
-                ydl.download([url])
-            
-            # --- Find the final file ---
-            # yt-dlp might rename the file based on the video title.
-            downloaded_file = None
-            for f in os.listdir(download_temp_dir):
-                # Look for any file with the expected extension
-                if f.endswith(f'.{download_ext}'):
-                    downloaded_file = os.path.join(download_temp_dir, f)
-                    break
-            
-            if not downloaded_file or not os.path.exists(downloaded_file):
-                raise Exception(f"Downloaded file not found in {download_temp_dir}. Check yt-dlp output.")
-
-            filepath = downloaded_file
-            if os.path.getsize(filepath) == 0:
-                raise Exception("Downloaded file is empty (Zero size).")
-            
-            logger.info(f"Download completed: {filepath}")
-            # Return the file path and the temporary directory for cleanup
-            return filepath, download_temp_dir
-            
-        except Exception as e:
-            # Cleanup the entire temporary directory in case of error
-            try:
-                shutil.rmtree(download_temp_dir)
-            except:
-                pass
-            
-            # Provide an error if FFmpeg failed to run
-            if 'ffprobe' in str(e) or 'ffmpeg' in str(e):
-                 # Log the path and permissions hint
-                 logger.error(f"FFmpeg execution error path check: {FFMPEG_PATH}")
-                 raise Exception(f"Download failed: FFmpeg execution error. Check if '{FFMPEG_PATH}' exists and has executable permission (chmod +x).")
-            
-            raise Exception(f"Download failed: {str(e)}")
+    def _format_filesize(self, bytes_size):
+        if not bytes_size: return "Unknown"
+        for unit in ['B', 'KB', 'MB', 'GB']:
+            if bytes_size < 1024.0:
+                return f"{bytes_size:.1f} {unit}"
+            bytes_size /= 1024.0
+        return f"{bytes_size:.1f} TB"
 
 # Initialize downloader
 downloader = UniversalDownloaderFixed()
@@ -278,157 +245,104 @@ downloader = UniversalDownloaderFixed()
 
 @app.route('/')
 def home():
-    """Simple API status route."""
     return jsonify({
-        'message': 'Universal Downloader API (FFmpeg Static Binary)',
+        'message': 'Universal Downloader API (SaveFrom/Y2Mate Style)',
         'status': 'running',
         'security': f'Only accessible from {ALLOWED_ORIGIN}',
         'supported_sites': '1000+ sites (via yt-dlp)',
-        'note': f'FFmpeg is integrated from: {FFMPEG_PATH}. All video qualities now include audio via merging.',
+        'note': 'For 720p/1080p downloads, the video stream often lacks audio without FFmpeg.',
         'available_endpoints': ['/api/info', '/api/download', '/api/search']
     })
 
-# --- Error Handling Helper ---
-# A common way to handle errors in routes is a decorator or a central handler.
-def api_response(func):
-    """Decorator to handle common API errors and return JSON responses."""
-    @functools.wraps(func)
-    def wrapper(*args, **kwargs):
-        try:
-            return func(*args, **kwargs)
-        except Exception as e:
-            logger.error(f"API Error in {func.__name__}: {e}")
-            status_code = 500
-            # Custom error codes based on exception type can be added here
-            if "not found" in str(e).lower() or "inaccessible" in str(e).lower():
-                status_code = 404
-            elif "invalid url" in str(e).lower():
-                status_code = 400
-            
-            return jsonify({'success': False, 'error': str(e)}), status_code
-    return wrapper
-
-@app.route('/api/search', methods=['GET'])
-@api_response
-def api_search():
-    """
-    Search for videos based on a query.
-    GET /api/search?q=<query>
-    """
-    query = request.args.get('q', '')
-    if not query:
-        return jsonify({'success': False, 'error': 'Query parameter "q" is required.'}), 400
-    
-    results = downloader.search_videos(query)
-    
-    return jsonify({
-        'success': True,
-        'query': query,
-        'results': results
-    })
-
-
-@app.route('/api/info', methods=['GET'])
-@api_response
-def api_info():
-    """
-    Get video info and available download formats.
-    GET /api/info?url=<video_url>
-    """
-    url = request.args.get('url')
-    if not url:
-        return jsonify({'success': False, 'error': 'URL parameter is missing.'}), 400
-
-    if not downloader.validate_url(url):
-        return jsonify({'success': False, 'error': 'Invalid URL or unsupported site.'}), 400
-
-    video_info = downloader.get_video_info(url)
-    return jsonify(video_info)
-
-@app.route('/api/download', methods=['GET'])
-@api_response
-@cross_origin(origins=[ALLOWED_ORIGIN]) # Re-apply CORS specifically to the download route for headers
-def api_download():
-    """
-    Trigger the download of a specific format.
-    GET /api/download?url=<video_url>&format_id=<format_string>
-    """
-    url = request.args.get('url')
-    format_id = request.args.get('format_id')
-    
-    if not url or not format_id:
-        return jsonify({
-            'success': False, 
-            'error': 'Missing required parameters: url and format_id.'
-        }), 400
-        
-    if not downloader.validate_url(url):
-        return jsonify({'success': False, 'error': 'Invalid URL or unsupported site.'}), 400
-
-    # The download function now returns the file path and the temp dir path
-    filepath, temp_dir_path = downloader.download_video(url, format_id)
-    
-    # Extract original filename for the download header (optional, but nice)
+@app.route('/api/info', methods=['POST'])
+@cross_origin(origins=[ALLOWED_ORIGIN])
+def get_video_info_route():
     try:
-        # A simple filename based on the video title (requires a separate info call, 
-        # but to keep it simple, we use a generic name for now).
-        # A better approach is to fetch info once and pass the title.
-        file_ext = os.path.splitext(filepath)[1]
+        data = request.get_json() or {}
+        url = data.get('url', '').strip()
         
-        # Use a more descriptive name for the file header
-        info = downloader.get_video_info(url)
-        title = info.get('title', 'video')
-        # Sanitize title for filename
-        safe_title = re.sub(r'[^\w\-_\. ]', '', title).replace(' ', '_')
+        if not url:
+            return jsonify({'error': 'URL is required'}), 400
         
-        filename = f"{safe_title}{file_ext}"
+        if not downloader.validate_url(url):
+            return jsonify({
+                'error': 'URL not supported',
+                'message': 'This website is not supported by the downloader',
+            }), 400
+        
+        video_info = downloader.get_video_info(url)
+        return jsonify(video_info)
         
     except Exception as e:
-        logger.warning(f"Could not generate descriptive filename: {e}")
-        filename = os.path.basename(filepath)
+        logger.error(f"Info error: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/download', methods=['POST'])
+@cross_origin(origins=[ALLOWED_ORIGIN])
+def download_video_route():
+    filepath = None
+    try:
+        data = request.get_json() or {}
+        url = data.get('url', '').strip()
+        format_id = data.get('format_id', '')
         
-    # --- Send File and Clean Up ---
-    
-    # Use send_file with the as_attachment flag
-    response = send_file(
-        filepath, 
-        mimetype='application/octet-stream', 
-        as_attachment=True,
-        download_name=filename # Use download_name instead of attachment_filename
-    )
+        if not url or not format_id:
+            return jsonify({'error': 'URL and format_id are required'}), 400
+        
+        filepath = downloader.download_video(url, format_id)
+        
+        # Determine filename and MIME type
+        if format_id == 'bestaudio/best':
+            filename = "download.mp3"
+            mimetype = 'audio/mpeg'
+        else:
+             filename = "download.mp4"
+             mimetype = 'video/mp4'
+        
+        response = send_file(
+            filepath,
+            as_attachment=True,
+            download_name=filename,
+            mimetype=mimetype
+        )
+        
+        @response.call_on_close
+        def cleanup():
+            try:
+                if filepath and os.path.exists(filepath):
+                    os.remove(filepath)
+            except:
+                pass
+        
+        return response
+        
+    except Exception as e:
+        logger.error(f"Download error: {e}")
+        if filepath and os.path.exists(filepath):
+            try:
+                os.remove(filepath)
+            except:
+                pass
+        return jsonify({'error': str(e)}), 500
 
-    # After sending the file, we must clean up the temporary files/directory.
-    # We use the 'after_request' hook to ensure cleanup happens *after* the file is sent.
-    @response.call_on_close
-    def cleanup():
-        # This will be called when the response stream is closed.
-        cleanup_file(filepath) # Remove the file itself
-        # Remove the entire temporary directory (best practice)
-        try:
-            shutil.rmtree(temp_dir_path)
-            logger.info(f"Cleaned up temporary directory: {temp_dir_path}")
-        except Exception as e:
-            logger.error(f"Error cleaning up temporary directory {temp_dir_path}: {e}")
-
-    # For safety/redundancy, you could also add an after_request hook, 
-    # but call_on_close is usually sufficient for cleaning up the downloaded file.
-    
-    # NOTE: send_file handles the file reading/streaming, but the cleanup is crucial!
-    return response
-
+@app.route('/api/search', methods=['POST'])
+@cross_origin(origins=[ALLOWED_ORIGIN])
+def search_videos_route():
+    try:
+        data = request.get_json() or {}
+        query = data.get('query', '').strip()
+        
+        if not query:
+            return jsonify({'error': 'Search query is required'}), 400
+            
+        results = downloader.search_videos(query)
+        
+        return jsonify({'results': results})
+        
+    except Exception as e:
+        logger.error(f"Search error: {e}")
+        return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':
-    logger.info("🚀 Universal Downloader Started (FFmpeg Static Binary Mode)")
-    # Check if the binary exists on startup
-    if not os.path.exists(FFMPEG_PATH):
-        logger.error(f"FATAL: FFmpeg binary not found at {FFMPEG_PATH}. Please follow the setup instructions (e.g., placing the binary in a 'bin' folder).")
-    elif not os.access(FFMPEG_PATH, os.X_OK):
-        logger.error(f"FATAL: FFmpeg binary at {FFMPEG_PATH} does not have executable permission. Please run: ")
-        print("--------------------------------------------------")
-        print(f"chmod +x {FFMPEG_PATH}")
-        print("--------------------------------------------------")
-    else:
-        logger.info("FFmpeg binary found and integrated.")
-    
-    # You might want to remove debug=True in a production environment
+    logger.info("🚀 Universal Downloader Started (Replit/AWS-Lite Mode)")
     app.run(host='0.0.0.0', port=os.environ.get('PORT', 5000), debug=True)
