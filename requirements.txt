@@ -1,6 +1,6 @@
-Flask==2.3.3
-Flask-CORS==4.0.0
-yt-dlp==2024.08.06
-gunicorn==21.2.0
-requests==2.32.3
-Werkzeug==2.3.7
+Flask
+Flask-CORS
+yt-dlp
+gunicorn
+requests
+Werkzeug
