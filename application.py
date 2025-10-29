@@ -7,7 +7,7 @@ import uuid
 import logging
 import re
 import math 
-import shutil # For safely handling file renaming across different file systems
+import shutil 
 
 # Configuration
 logging.basicConfig(level=logging.INFO)
@@ -16,9 +16,10 @@ logger = logging.getLogger(__name__)
 app = Flask(__name__)
 
 # --- SECURITY CONFIGURATION: CORS ---
-# صرف اس ڈومین کو اجازت ہے
+# sirf is domain ko ijazat hai
 ALLOWED_ORIGIN = "https://crispy0921.blogspot.com"
-CORS(app, origins=[ALLOWED_ORIGIN])
+# CORS ko sirf ALLOWED_ORIGIN ke liye enable karein
+CORS(app, resources={r"/*": {"origins": ALLOWED_ORIGIN}})
 # ---
 
 # --- Quality Configuration ---
@@ -36,10 +37,20 @@ class UniversalDownloaderFixed:
         if not url or not isinstance(url, str):
             return False
         try:
-            with yt_dlp.YoutubeDL(self.ydl_opts) as ydl:
+            # Setting up a quick check with minimal processing
+            ydl_opts = {
+                'quiet': True,
+                'no_warnings': True,
+                'extract_flat': 'in_playlist',
+                'format': 'best',
+                'skip_download': True,
+                'nocheckcertificate': True
+            }
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 ydl.extract_info(url, download=False, process=False)
                 return True
-        except:
+        except Exception as e:
+            logger.warning(f"URL validation failed for {url}: {e}")
             return False
     
     def get_video_info(self, url):
@@ -67,17 +78,12 @@ class UniversalDownloaderFixed:
                     'formats': [],
                 }
                 
-                # --- Format Generation Logic (Fixed for No FFmpeg) ---
-                
+                # --- Format Generation Logic ---
                 video_formats = []
-                # 1. Video + Audio (MP4) Formats
                 for height in sorted(ALLOWED_VIDEO_QUALITIES, reverse=True):
-                    
-                    # New Simplified Format String: Prioritizes combined streams
-                    # 1. best[height<=H][ext=mp4] -> Looks for a single MP4 stream with audio (Works up to ~480p)
-                    # 2. bestvideo[height<=H][ext=mp4] -> Fallback: Video Only stream
-                    # We remove the merge string to avoid the explicit FFmpeg error.
-                    format_string = f"best[height<={height}][ext=mp4]/{height}p/bestvideo[height<={height}][ext=mp4]"
+                    # Simplified format string (Relies on FFmpeg Buildpack to merge streams if needed)
+                    # We prioritize combined streams first, then separate video stream.
+                    format_string = f"bestvideo[height<={height}]+bestaudio/best[height<={height}]"
                     
                     # We use a custom format ID that includes the height for front-end clarity
                     custom_id = f'{height}p_mp4'
@@ -85,13 +91,13 @@ class UniversalDownloaderFixed:
                     video_formats.append({
                         'id': custom_id,
                         'name': f'Video + Audio (Max {height}p MP4)',
-                        'format_id': format_string, # Send the simple format string to download
+                        'format_id': format_string, 
                         'quality': f'{height}p',
                         'ext': 'mp4',
                         'size': 'Estimating...', 
                     })
                         
-                # 2. Audio Only (MP3 Placeholder) Format
+                # 2. Audio Only Format
                 audio_format = {
                     'id': 'bestaudio_mp3',
                     'name': 'Audio Only (MP3 - Good Quality)',
@@ -113,6 +119,7 @@ class UniversalDownloaderFixed:
     def download_video(self, url, format_id):
         """Download video/audio using the simplified format string"""
         filepath = None
+        # Use tempfile.gettempdir() for a safe, writable location on Heroku
         temp_dir = tempfile.gettempdir()
         
         try:
@@ -122,22 +129,23 @@ class UniversalDownloaderFixed:
             is_audio_download = (format_id == 'bestaudio/best')
 
             ydl_opts = {
+                # Output template: Use temp_dir and let yt-dlp determine the extension
                 'outtmpl': os.path.join(temp_dir, filename_base + '.%(ext)s'),
                 'format': format_id,
                 'postprocessors': [],
-                # IMPORTANT: Set merge_output_format to 'webm' to prevent unwanted FFmpeg merge calls
-                'merge_output_format': 'webm', 
+                # Use mp4 merge format as we have installed FFmpeg buildpack
+                'merge_output_format': 'mp4', 
             }
             
-            # 1. Audio-only download
+            # 1. Audio-only download: Add post-processor to convert to MP3 if needed
             if is_audio_download:
-                # We allow yt-dlp to download the file with its original extension (.m4a/.opus)
-                pass 
-            
-            # 2. Video with Audio/Video Only
-            else:
-                # Force the output template to MP4 to ensure a consistent file name for later renaming/finding
-                ydl_opts['outtmpl'] = os.path.join(temp_dir, filename_base + '.mp4')
+                ydl_opts['postprocessors'].append({
+                    'key': 'FFmpegExtractAudio',
+                    'preferredcodec': 'mp3',
+                    'preferredquality': '192',
+                })
+                # No need to set merge format as it's audio extraction
+                del ydl_opts['merge_output_format']
             
             logger.info(f"Starting download: {url} with format: {format_id}")
             
@@ -146,35 +154,29 @@ class UniversalDownloaderFixed:
             
             # --- Find and Rename Logic (Updated for stability) ---
             
-            # Find the downloaded file based on the base name
             downloaded_file = None
-            for f in os.listdir(temp_dir):
-                if f.startswith(filename_base) and not f.endswith('.part'):
-                    downloaded_file = os.path.join(temp_dir, f)
-                    break
-            
-            if not downloaded_file or not os.path.exists(downloaded_file):
-                raise Exception("Downloaded file not found. Try a lower quality.")
-
-            # Final file path and renaming logic
-            filepath = downloaded_file
             
             if is_audio_download:
-                # Rename the downloaded audio file (e.g., .m4a) to .mp3
-                final_name = f"{filename_base}.mp3"
-                final_path = os.path.join(temp_dir, final_name)
-                # Use shutil.move for reliable rename across filesystems
-                shutil.move(downloaded_file, final_path)
-                filepath = final_path
+                # Look for the mp3 file created by the post-processor
+                downloaded_file = os.path.join(temp_dir, f"{filename_base}.mp3")
+            else:
+                # Look for the final merged mp4 file
+                downloaded_file = os.path.join(temp_dir, f"{filename_base}.mp4")
+
+            # Final check if file exists
+            if not downloaded_file or not os.path.exists(downloaded_file):
+                 # Fallback: check for any file starting with the base name
+                for f in os.listdir(temp_dir):
+                    if f.startswith(filename_base) and not f.endswith('.part'):
+                        downloaded_file = os.path.join(temp_dir, f)
+                        break
+                
+            if not downloaded_file or not os.path.exists(downloaded_file):
+                 # This is the critical point of failure - try a lower quality next time.
+                raise Exception("Downloaded file not found. Check logs for FFmpeg errors.")
+
+            filepath = downloaded_file
             
-            elif not downloaded_file.endswith('.mp4'):
-                # Rename downloaded video (e.g., .webm) to .mp4 for consistency
-                 final_name = f"{filename_base}.mp4"
-                 final_path = os.path.join(temp_dir, final_name)
-                 shutil.move(downloaded_file, final_path)
-                 filepath = final_path
-
-
             if os.path.getsize(filepath) == 0:
                 raise Exception("Downloaded file is empty")
             
@@ -187,13 +189,11 @@ class UniversalDownloaderFixed:
                     os.remove(filepath)
                 except:
                     pass
-            # Clearer message on high-res failure due to no FFmpeg
-            if 'bestvideo' in format_id and 'bestaudio' not in format_id:
-                 raise Exception(f"Download failed (No Audio): For this high quality, the video stream contains no audio. You must use a tool like FFmpeg to combine the audio, or choose a 480p/360p option.")
-            
+            # Clearer message on failure
             raise Exception(f"Video Download failed: {str(e)}")
             
     # --- Search Functionality (Same as before) ---
+    # (Rest of the search_videos and format functions are assumed to be here and unchanged)
     def search_videos(self, query):
         """Search videos on YouTube using yt-dlp's search functionality"""
         try:
@@ -226,17 +226,20 @@ class UniversalDownloaderFixed:
 
     def _format_duration(self, seconds):
         if not seconds: return "Unknown"
+        # ... (rest of function)
         minutes = seconds // 60
         seconds = seconds % 60
         return f"{minutes}:{seconds:02d}"
 
     def _format_filesize(self, bytes_size):
         if not bytes_size: return "Unknown"
+        # ... (rest of function)
         for unit in ['B', 'KB', 'MB', 'GB']:
             if bytes_size < 1024.0:
                 return f"{bytes_size:.1f} {unit}"
             bytes_size /= 1024.0
         return f"{bytes_size:.1f} TB"
+
 
 # Initialize downloader
 downloader = UniversalDownloaderFixed()
@@ -250,12 +253,12 @@ def home():
         'status': 'running',
         'security': f'Only accessible from {ALLOWED_ORIGIN}',
         'supported_sites': '1000+ sites (via yt-dlp)',
-        'note': 'For 720p/1080p downloads, the video stream often lacks audio without FFmpeg.',
+        'note': 'FFmpeg Buildpack is required for high-quality downloads.',
         'available_endpoints': ['/api/info', '/api/download', '/api/search']
     })
 
 @app.route('/api/info', methods=['POST'])
-@cross_origin(origins=[ALLOWED_ORIGIN])
+# cross_origin decorator ki yahan zaroorat nahi agar CORS(app, resources...) upar theek se set ho gaya hai
 def get_video_info_route():
     try:
         data = request.get_json() or {}
@@ -278,7 +281,7 @@ def get_video_info_route():
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/download', methods=['POST'])
-@cross_origin(origins=[ALLOWED_ORIGIN])
+# cross_origin decorator ki yahan zaroorat nahi
 def download_video_route():
     filepath = None
     try:
@@ -326,7 +329,7 @@ def download_video_route():
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/search', methods=['POST'])
-@cross_origin(origins=[ALLOWED_ORIGIN])
+# cross_origin decorator ki yahan zaroorat nahi
 def search_videos_route():
     try:
         data = request.get_json() or {}
@@ -347,5 +350,7 @@ def search_videos_route():
 def health_check():
     return jsonify({'status': 'healthy', 'message': 'Server is running'})
 
+# Heroku gunicorn se run hota hai, isliye yeh block sirf local testing ke liye hai.
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=os.environ.get('PORT', 5000), debug=True)
+    # Flask ko sirf PORT environment variable use karne de
+    app.run(debug=False)
