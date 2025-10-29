@@ -1,8 +1,0 @@
-# Project root folder mein jayein
-cd your-app-folder
-
-# .python-version file create karein
-echo "3.9" > .python-version
-
-# Check file create hua ya nahi
-ls -la | grep .python-version
