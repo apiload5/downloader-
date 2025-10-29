@@ -343,8 +343,9 @@ def search_videos_route():
         logger.error(f"Search error: {e}")
         return jsonify({'error': str(e)}), 500
 
-# End of file mein yeh hona chahiye:
-if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=os.environ.get('PORT', 5000), debug=True) @app.route('/health')
+@app.route('/health')
 def health_check():
     return jsonify({'status': 'healthy', 'message': 'Server is running'})
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=os.environ.get('PORT', 5000), debug=True)
