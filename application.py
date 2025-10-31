@@ -1,7 +1,6 @@
 # ==============================
 # SaveMedia Backend (Robust Fixed Version with MB + Audio Filter) Author by Muhammad Amir Khursheed Ahmed Ticnodeveroper 
 # ==============================
-from main import app
 import os
 import asyncio
 import time
@@ -13,6 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from dotenv import load_dotenv
 from downloader import extract_info, get_best_format_stream_url
+from mangum import Mangum  # ✅ Add this import
 
 # ------------------------------
 # Load Environment Variables
