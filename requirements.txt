@@ -5,3 +5,4 @@ httpx
 python-dotenv
 aioredis  # optional, if you want Redis rate limits
 pydantic
+mangum     #aws 
