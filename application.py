@@ -1,5 +1,6 @@
 # ==============================
-# SaveMedia Backend (Robust Fixed Version with MB + Audio Filter) Author Muhammad Amir Khursheed Ahmed khan [Ticnodeveroper]
+# SaveMedia Backend (AWS + Replit + Heroku Compatible)
+# Author: Muhammad Amir Khursheed Ahmed Khan [Ticnodeveloper]
 # ==============================
 
 import os
@@ -80,6 +81,7 @@ def rate_limit_check(client_ip: str):
 async def home():
     return {"status": "ok", "message": "SaveMedia Backend running fine"}
 
+
 @application.post("/api/info")
 async def info(req: Request, body: InfoRequest):
     client_ip = _client_ip(req)
@@ -95,7 +97,6 @@ async def info(req: Request, body: InfoRequest):
         # ✅ Filter: only video+audio formats + filesize in MB
         formats = []
         for f in info.get("formats", []):
-            # skip video-only formats
             if f.get("acodec") in [None, "none"]:
                 continue
 
@@ -136,25 +137,14 @@ async def download(req: Request, url: str = "", format_id: Optional[str] = None)
     client_ip = _client_ip(req)
 
     if req.method == "POST":
-        body_url = ""
-        body_format = None
         try:
             body = await req.json()
-            body_url = body.get("url") or ""
-            body_format = body.get("format_id")
+            url = body.get("url") or url
+            format_id = body.get("format_id") or format_id
         except Exception:
-            try:
-                form = await req.form()
-                body_url = form.get("url") or ""
-                body_format = form.get("format_id") or None
-            except Exception:
-                body_url = ""
-                body_format = None
-
-        url = body_url or url or req.query_params.get("url") or ""
-        format_id = body_format or format_id or req.query_params.get("format_id") or None
-    else:
-        url = url or req.query_params.get("url") or ""
+            form = await req.form()
+            url = form.get("url") or url
+            format_id = form.get("format_id") or format_id
 
     if not url:
         raise HTTPException(status_code=400, detail="URL required")
@@ -165,12 +155,10 @@ async def download(req: Request, url: str = "", format_id: Optional[str] = None)
         print(f"[DOWNLOAD] Resolving stream for: {url} (format={format_id})", flush=True)
         stream_info = await get_best_format_stream_url(url, format_id=format_id)
         if not stream_info or "url" not in stream_info:
-            print("[ERROR] No stream url in stream_info", flush=True)
             raise HTTPException(status_code=500, detail="Cannot fetch media stream")
 
         remote_url = stream_info["url"]
         filename = stream_info.get("filename", f"video.{stream_info.get('ext', 'mp4')}")
-        print(f"[DOWNLOAD] Streaming remote_url: {remote_url}", flush=True)
 
         async def stream_remote():
             timeout = httpx.Timeout(300.0, connect=60.0)
@@ -179,14 +167,12 @@ async def download(req: Request, url: str = "", format_id: Optional[str] = None)
                 async with httpx.AsyncClient(timeout=timeout, headers=headers, follow_redirects=True) as client:
                     async with client.stream("GET", remote_url) as resp:
                         if resp.status_code >= 400:
-                            print(f"[ERROR] upstream status {resp.status_code}", flush=True)
                             yield b""
                             return
                         async for chunk in resp.aiter_bytes(chunk_size=65536):
                             yield chunk
             except Exception as e:
-                print("[ERROR] stream_remote exception:", repr(e), flush=True)
-                return
+                print("[ERROR] stream_remote:", repr(e), flush=True)
 
         response = StreamingResponse(stream_remote(), media_type="application/octet-stream")
         response.headers["Content-Disposition"] = f'attachment; filename="{filename}"'
@@ -194,20 +180,12 @@ async def download(req: Request, url: str = "", format_id: Optional[str] = None)
         response.headers["Pragma"] = "no-cache"
         return response
     finally:
-        try:
-            download_sem.release()
-        except Exception:
-            pass
+        download_sem.release()
 
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
-# ... your imports ...
 
-app = FastAPI()
 # ------------------------------
-# Run Locally or on Replit / AWS / Heroku
+# Run Locally or on AWS / Replit / Heroku
 # ------------------------------
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("application:app", host="0.0.0.0", port=8080, reload=False)
-    
+    uvicorn.run("application:application", host="0.0.0.0", port=8080, reload=False)
