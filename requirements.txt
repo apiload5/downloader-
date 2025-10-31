@@ -1,9 +1,10 @@
 fastapi
 uvicorn[standard]
+gunicorn
 yt-dlp
 httpx
-aioredis  # optional, if you want Redis rate limits
 pydantic
+python-dotenv
 ffmpeg-python
 python-multipart
- 
+aiofiles
