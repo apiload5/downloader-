@@ -205,5 +205,5 @@ async def download(req: Request, url: str = "", format_id: Optional[str] = None)
 # ------------------------------
 if __name__ == "__main__":
     import uvicorn
-    port = int(os.environ.get("PORT", 8080))
-    uvicorn.run("application:application", host="0.0.0.0", port=port)
+    uvicorn.run("application:app", host="0.0.0.0", port=8080, reload=False)
+    
