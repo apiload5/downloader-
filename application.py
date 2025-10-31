@@ -199,7 +199,11 @@ async def download(req: Request, url: str = "", format_id: Optional[str] = None)
         except Exception:
             pass
 
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+# ... your imports ...
 
+app = FastAPI()
 # ------------------------------
 # Run Locally or on Replit / AWS / Heroku
 # ------------------------------
