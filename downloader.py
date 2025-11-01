@@ -1,97 +1,89 @@
-// Frontend mein download function mein yeh add karo
-async function initiateSaveFromStyleDownload(formatId, quality) {
-    try {
-        const url = videoUrlInput.value;
-        
-        updateProgress(90, 'Getting download link...');
-        
-        const response = await fetch(`${API_BASE_URL}/download`, {
-            method: 'POST',
-            headers: { 
-                'Content-Type': 'application/json',
-                'Accept': 'application/json'
-            },
-            body: JSON.stringify({ 
-                url: url, 
-                format_id: formatId, 
-                quality: quality 
-            })
-        });
+# ==============================
+# SaveMedia Downloader Helper
+# Author: Muhammad Amir Khursheed Ahmed + GPT-5
+# ==============================
 
-        if (!response.ok) throw new Error('Download failed');
+import asyncio
+from yt_dlp import YoutubeDL
+from typing import Dict, Optional, Any
 
-        const downloadData = await response.json();
-        
-        // ✅ HLS URL CHECK
-        if (downloadData.direct_url.includes('manifest.googlevideo.com/api/manifest/hls_playlist')) {
-            // HLS URL hai - user ko manual download guide show karo
-            showManualDownloadGuide(downloadData.direct_url, downloadData.filename);
-        } else {
-            // Normal URL hai - direct download karo
-            triggerDirectDownload(downloadData.direct_url, downloadData.filename);
-            showSuccess('Download started successfully! File will save automatically.');
-        }
+# ------------------------------
+# Common YT-DLP Configuration
+# ------------------------------
+YDL_OPTS = {
+    "quiet": True,                # no logs in console
+    "no_warnings": True,          # hide warnings
+    "skip_download": True,        # metadata only
+    "simulate": True,             # don’t actually download
+    "forcejson": True,            # always return JSON
+    "restrictfilenames": True,    # safe filenames
+    "ignoreerrors": True,
+    "nocheckcertificate": True,
+    "geo_bypass": True,
+    "source_address": "0.0.0.0",
+}
 
-        updateProgress(100, 'Download process started!');
-        
-        downloadCount++;
-        localStorage.setItem('downloadCount', downloadCount.toString());
-        
-        setTimeout(() => {
-            hideProgress();
-            downloadInProgress = false;
-            localStorage.removeItem('pendingDownload');
-        }, 2000);
+# ------------------------------
+# Extract full info from URL
+# ------------------------------
+async def extract_info(url: str) -> Dict[str, Any]:
+    """
+    Returns metadata (title, uploader, formats, etc.) for a given URL.
+    Uses yt-dlp in a background thread so FastAPI remains async.
+    """
+    loop = asyncio.get_event_loop()
 
-    } catch (error) {
-        console.error('Download error:', error);
-        hideProgress();
-        downloadInProgress = false;
-        localStorage.removeItem('pendingDownload');
-        showError('Download failed: ' + error.message);
+    def _run():
+        with YoutubeDL(YDL_OPTS) as ydl:
+            return ydl.extract_info(url, download=False)
+
+    return await loop.run_in_executor(None, _run)
+
+# ------------------------------
+# Get Best Available Direct Download URL
+# ------------------------------
+async def get_best_format_stream_url(url: str, format_id: Optional[str] = None) -> Dict[str, Any]:
+    """
+    Returns direct file download link (not stream proxy) with best quality.
+    """
+    info = await extract_info(url)
+    if not info:
+        raise RuntimeError("Failed to fetch info from URL")
+
+    formats = info.get("formats", [])
+    if not formats:
+        raise RuntimeError("No formats available for this media")
+
+    chosen = None
+
+    # --- If format_id specified
+    if format_id:
+        for f in formats:
+            if f.get("format_id") == format_id:
+                chosen = f
+                break
+
+    # --- Otherwise pick best combined (progressive) format
+    if not chosen:
+        progressive = [f for f in formats if f.get("acodec") != "none" and f.get("vcodec") != "none"]
+        if progressive:
+            progressive.sort(key=lambda x: (x.get("height") or 0), reverse=True)
+            chosen = progressive[0]
+
+    # --- Fallback
+    if not chosen and formats:
+        chosen = formats[0]
+
+    if not chosen or not chosen.get("url"):
+        raise RuntimeError("No playable format found")
+
+    ext = chosen.get("ext", "mp4")
+    safe_title = (info.get("title") or "video").replace("/", "_").replace("\\", "_")
+
+    return {
+        "url": chosen.get("url"),
+        "ext": ext,
+        "format_id": chosen.get("format_id"),
+        "filesize": chosen.get("filesize") or chosen.get("filesize_approx"),
+        "filename": f"{safe_title}.{ext}",
     }
-}
-
-// Manual download guide for HLS URLs
-function showManualDownloadGuide(hlsUrl, filename) {
-    const guideHTML = `
-        <div style="background: #e3f2fd; padding: 20px; border-radius: 10px; margin: 15px 0; border: 1px solid #bbdefb;">
-            <h4 style="color: #1565c0; margin-bottom: 15px;">📺 Video Ready for Download</h4>
-            <p style="color: #1565c0; margin-bottom: 15px;">
-                <strong>Follow these simple steps to download:</strong>
-            </p>
-            <ol style="color: #1565c0; text-align: left; margin-bottom: 20px;">
-                <li>Click the button below to open video</li>
-                <li>Right-click on the video player</li>
-                <li>Select "Save video as..." or "Download"</li>
-                <li>Choose location and save the file</li>
-            </ol>
-            <div style="display: flex; gap: 10px; flex-wrap: wrap; justify-content: center;">
-                <button onclick="window.open('${hlsUrl}', '_blank')" 
-                        style="background: #2196F3; color: white; border: none; padding: 12px 20px; border-radius: 8px; cursor: pointer; font-weight: bold;">
-                    🎬 Open Video for Download
-                </button>
-                <button onclick="tryDifferentFormat()" 
-                        style="background: #4CAF50; color: white; border: none; padding: 12px 20px; border-radius: 8px; cursor: pointer;">
-                    🔄 Try Different Quality
-                </button>
-            </div>
-        </div>
-    `;
-    
-    successContainer.innerHTML = guideHTML;
-    successContainer.style.display = 'block';
-}
-
-// Try different format function
-async function tryDifferentFormat() {
-    const alternativeFormats = ['22', '18', '136', '137']; // MP4 formats
-    for (let formatId of alternativeFormats) {
-        try {
-            startDownload(formatId, 'Alternative Format');
-            break;
-        } catch (e) {
-            continue;
-        }
-    }
-}
