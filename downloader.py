@@ -1,12 +1,11 @@
 # ==============================
 # SaveMedia Downloader Helper
-# Author: amir + GPT-5
+# Author: Muhammad Amir Khursheed Ahmed + GPT-5
 # ==============================
 
 import asyncio
 from yt_dlp import YoutubeDL
 from typing import Dict, Optional, Any
-
 
 # ------------------------------
 # Common YT-DLP Configuration
@@ -24,7 +23,6 @@ YDL_OPTS = {
     "source_address": "0.0.0.0",
 }
 
-
 # ------------------------------
 # Extract full info from URL
 # ------------------------------
@@ -41,17 +39,12 @@ async def extract_info(url: str) -> Dict[str, Any]:
 
     return await loop.run_in_executor(None, _run)
 
-
 # ------------------------------
-# Get Best Available Stream URL
+# Get Best Available Direct Download URL
 # ------------------------------
 async def get_best_format_stream_url(url: str, format_id: Optional[str] = None) -> Dict[str, Any]:
     """
-    Given a URL and optional format_id, returns a dict containing:
-      - direct stream URL
-      - file extension
-      - best possible quality (audio+video)
-      - suggested filename
+    Returns direct file download link (not stream proxy) with best quality.
     """
     info = await extract_info(url)
     if not info:
@@ -63,7 +56,7 @@ async def get_best_format_stream_url(url: str, format_id: Optional[str] = None) 
 
     chosen = None
 
-    # --- If format_id specified, try that first
+    # --- If format_id specified
     if format_id:
         for f in formats:
             if f.get("format_id") == format_id:
@@ -77,7 +70,7 @@ async def get_best_format_stream_url(url: str, format_id: Optional[str] = None) 
             progressive.sort(key=lambda x: (x.get("height") or 0), reverse=True)
             chosen = progressive[0]
 
-    # --- Fallback to first working format
+    # --- Fallback
     if not chosen and formats:
         chosen = formats[0]
 
