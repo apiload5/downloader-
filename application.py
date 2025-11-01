@@ -1,15 +1,15 @@
 # ==============================
-# SaveMedia Backend (AWS Compatible)
+# SaveMedia Backend (Direct Download Mode)
 # Author: Muhammad Amir Khursheed Ahmed Khan [Ticnodeveloper]
+# Updated with GPT-5
 # ==============================
 
 import os
 import asyncio
 import time
-import httpx
 from typing import Optional, Dict, List, Any
 from fastapi import FastAPI, Request, HTTPException
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from dotenv import load_dotenv
@@ -28,7 +28,7 @@ RATE_LIMIT_PER_MIN = int(os.getenv("RATE_LIMIT_PER_MIN", "30"))
 # ------------------------------
 # Initialize FastAPI App
 # ------------------------------
-application = FastAPI(title="SaveMedia Backend", version="1.0")
+application = FastAPI(title="SaveMedia Backend (Direct Mode)", version="2.0")
 
 # ✅ CORS Middleware
 application.add_middleware(
@@ -36,9 +36,8 @@ application.add_middleware(
     allow_origins=[
         "https://crispy0921.blogspot.com",
         "https://savemedia.online",
-        "https://4f1afd56-6dff-4d5f-99c0-7d1702a92a3d-00-2qrni89n41qhi.sisko.replit.dev",
         "http://localhost:3000",
-        "*"  # remove "*" later for security
+        "*"  # for testing; remove in production
     ],
     allow_credentials=True,
     allow_methods=["*"],
@@ -69,7 +68,7 @@ def rate_limit_check(client_ip: str):
     history = ip_requests.get(client_ip, [])
     history = [t for t in history if t > now - window]
     if len(history) >= RATE_LIMIT_PER_MIN:
-        raise HTTPException(status_code=429, detail="Too many requests")
+        raise HTTPException(status_code=429, detail="Too many requests per minute")
     history.append(now)
     ip_requests[client_ip] = history
 
@@ -79,7 +78,7 @@ def rate_limit_check(client_ip: str):
 # ------------------------------
 @application.get("/")
 async def home():
-    return {"status": "ok", "message": "SaveMedia Backend running fine on AWS"}
+    return {"status": "ok", "message": "SaveMedia Direct Link Backend running fine"}
 
 
 # ------------------------------
@@ -97,11 +96,10 @@ async def info(req: Request, body: InfoRequest):
     try:
         info = await extract_info(url)
 
-        # ✅ Filter: only video+audio formats + filesize in MB
         formats = []
         for f in info.get("formats", []):
             if f.get("acodec") in [None, "none"]:
-                continue  # skip video-only formats
+                continue
 
             quality = str(f.get("format_note") or f.get("height") or "Unknown")
             if quality.lower() in ["", "none", "unknown"]:
@@ -133,70 +131,46 @@ async def info(req: Request, body: InfoRequest):
 
 
 # ------------------------------
-# Download Endpoint
+# Direct Download Link Endpoint
 # ------------------------------
 @application.api_route("/api/download", methods=["GET", "POST"])
 async def download(req: Request, url: str = "", format_id: Optional[str] = None):
+    """
+    Returns direct download link (no server-side streaming)
+    """
     client_ip = _client_ip(req)
+    rate_limit_check(client_ip)
 
     if req.method == "POST":
-        body_url = ""
-        body_format = None
         try:
             body = await req.json()
-            body_url = body.get("url") or ""
-            body_format = body.get("format_id")
+            url = body.get("url", url)
+            format_id = body.get("format_id", format_id)
         except Exception:
-            try:
-                form = await req.form()
-                body_url = form.get("url") or ""
-                body_format = form.get("format_id") or None
-            except Exception:
-                body_url = ""
-                body_format = None
-
-        url = body_url or url or req.query_params.get("url") or ""
-        format_id = body_format or format_id or req.query_params.get("format_id") or None
+            pass
     else:
-        url = url or req.query_params.get("url") or ""
+        url = url or req.query_params.get("url", "")
+        format_id = format_id or req.query_params.get("format_id", None)
 
     if not url:
         raise HTTPException(status_code=400, detail="URL required")
 
-    rate_limit_check(client_ip)
     await download_sem.acquire()
     try:
-        print(f"[DOWNLOAD] Resolving stream for: {url} (format={format_id})", flush=True)
+        print(f"[DIRECT LINK] Fetching for: {url} (format={format_id})", flush=True)
         stream_info = await get_best_format_stream_url(url, format_id=format_id)
         if not stream_info or "url" not in stream_info:
-            print("[ERROR] No stream url in stream_info", flush=True)
-            raise HTTPException(status_code=500, detail="Cannot fetch media stream")
+            raise HTTPException(status_code=500, detail="Cannot fetch direct media link")
 
-        remote_url = stream_info["url"]
-        filename = stream_info.get("filename", f"video.{stream_info.get('ext', 'mp4')}")
-        print(f"[DOWNLOAD] Streaming remote_url: {remote_url}", flush=True)
+        # ✅ Return direct link
+        return JSONResponse({
+            "status": "success",
+            "direct_url": stream_info["url"],
+            "filename": stream_info["filename"],
+            "ext": stream_info["ext"],
+            "filesize": stream_info.get("filesize"),
+        })
 
-        async def stream_remote():
-            timeout = httpx.Timeout(300.0, connect=60.0)
-            headers = {"user-agent": "savemedia-backend/1.0"}
-            try:
-                async with httpx.AsyncClient(timeout=timeout, headers=headers, follow_redirects=True) as client:
-                    async with client.stream("GET", remote_url) as resp:
-                        if resp.status_code >= 400:
-                            print(f"[ERROR] upstream status {resp.status_code}", flush=True)
-                            yield b""
-                            return
-                        async for chunk in resp.aiter_bytes(chunk_size=65536):
-                            yield chunk
-            except Exception as e:
-                print("[ERROR] stream_remote exception:", repr(e), flush=True)
-                return
-
-        response = StreamingResponse(stream_remote(), media_type="application/octet-stream")
-        response.headers["Content-Disposition"] = f'attachment; filename="{filename}"'
-        response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
-        response.headers["Pragma"] = "no-cache"
-        return response
     finally:
         try:
             download_sem.release()
@@ -205,7 +179,7 @@ async def download(req: Request, url: str = "", format_id: Optional[str] = None)
 
 
 # ------------------------------
-# Run Locally or on AWS
+# Run Locally or Deploy on Server
 # ------------------------------
 if __name__ == "__main__":
     import uvicorn
