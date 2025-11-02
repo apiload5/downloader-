@@ -7,9 +7,9 @@
 import os
 import asyncio
 import time
-from typing import Optional, Dict, List, Any
+from typing import Optional, Dict, List
 from fastapi import FastAPI, Request, HTTPException
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from dotenv import load_dotenv
@@ -131,44 +131,67 @@ async def info(req: Request, body: InfoRequest):
 
 
 # ------------------------------
-# Direct Download Link Endpoint
+# Direct Download Link Endpoint (Smart Mode)
 # ------------------------------
 @application.api_route("/api/download", methods=["GET", "POST"])
-async def download(req: Request, url: str = "", format_id: Optional[str] = None):
+async def download(req: Request, url: str = "", format_id: Optional[str] = None, mode: str = "json"):
     """
-    Returns direct download link (no server-side streaming)
+    Returns either:
+    - JSON response (for app use)
+    - 302 Redirect (for browser download) when ?mode=redirect or body.mode="redirect"
     """
     client_ip = _client_ip(req)
     rate_limit_check(client_ip)
 
+    # Read URL and parameters
     if req.method == "POST":
         try:
             body = await req.json()
             url = body.get("url", url)
             format_id = body.get("format_id", format_id)
+            mode = body.get("mode", mode)
         except Exception:
             pass
     else:
         url = url or req.query_params.get("url", "")
         format_id = format_id or req.query_params.get("format_id", None)
+        mode = req.query_params.get("mode", mode)
 
     if not url:
         raise HTTPException(status_code=400, detail="URL required")
 
     await download_sem.acquire()
     try:
-        print(f"[DIRECT LINK] Fetching for: {url} (format={format_id})", flush=True)
+        print(f"[DIRECT LINK] Fetching for: {url} (format={format_id}, mode={mode})", flush=True)
         stream_info = await get_best_format_stream_url(url, format_id=format_id)
         if not stream_info or "url" not in stream_info:
             raise HTTPException(status_code=500, detail="Cannot fetch direct media link")
 
-        # ✅ Return direct link
+        direct_url = stream_info["url"]
+        filename = stream_info["filename"]
+
+        # ✅ Force download if mode=redirect
+        if str(mode).lower() == "redirect":
+            response_headers = {
+                "Content-Disposition": f'attachment; filename="{filename}"',
+                "Cache-Control": "no-cache, no-store, must-revalidate",
+                "Pragma": "no-cache",
+                "Expires": "0",
+            }
+            return RedirectResponse(
+                url=direct_url,
+                status_code=302,
+                headers=response_headers
+            )
+
+        # Otherwise, return JSON
         return JSONResponse({
             "status": "success",
-            "direct_url": stream_info["url"],
-            "filename": stream_info["filename"],
-            "ext": stream_info["ext"],
+            "direct_url": direct_url,
+            "filename": filename,
+            "ext": stream_info.get("ext"),
             "filesize": stream_info.get("filesize"),
+            "mode": "json"
         })
 
     finally:
