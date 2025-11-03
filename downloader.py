@@ -1,36 +1,27 @@
 # ==============================
-# SaveMedia Downloader Helper
-# Author: Muhammad Amir Khursheed Ahmed + GPT-5
+# SaveMedia Downloader Helper (Zero-Load Mode)
+# Author: amir + GPT-5
 # ==============================
 
 import asyncio
 from yt_dlp import YoutubeDL
 from typing import Dict, Optional, Any
 
-# ------------------------------
-# Common YT-DLP Configuration
-# ------------------------------
 YDL_OPTS = {
-    "quiet": True,                # no logs in console
-    "no_warnings": True,          # hide warnings
-    "skip_download": True,        # metadata only
-    "simulate": True,             # don’t actually download
-    "forcejson": True,            # always return JSON
-    "restrictfilenames": True,    # safe filenames
+    "quiet": True,
+    "no_warnings": True,
+    "skip_download": True,
+    "simulate": True,
+    "forcejson": True,
+    "restrictfilenames": True,
     "ignoreerrors": True,
     "nocheckcertificate": True,
     "geo_bypass": True,
     "source_address": "0.0.0.0",
 }
 
-# ------------------------------
-# Extract full info from URL
-# ------------------------------
+
 async def extract_info(url: str) -> Dict[str, Any]:
-    """
-    Returns metadata (title, uploader, formats, etc.) for a given URL.
-    Uses yt-dlp in a background thread so FastAPI remains async.
-    """
     loop = asyncio.get_event_loop()
 
     def _run():
@@ -39,38 +30,30 @@ async def extract_info(url: str) -> Dict[str, Any]:
 
     return await loop.run_in_executor(None, _run)
 
-# ------------------------------
-# Get Best Available Direct Download URL
-# ------------------------------
+
 async def get_best_format_stream_url(url: str, format_id: Optional[str] = None) -> Dict[str, Any]:
-    """
-    Returns direct file download link (not stream proxy) with best quality.
-    """
     info = await extract_info(url)
     if not info:
         raise RuntimeError("Failed to fetch info from URL")
 
     formats = info.get("formats", [])
     if not formats:
-        raise RuntimeError("No formats available for this media")
+        raise RuntimeError("No formats available")
 
     chosen = None
 
-    # --- If format_id specified
     if format_id:
         for f in formats:
             if f.get("format_id") == format_id:
                 chosen = f
                 break
 
-    # --- Otherwise pick best combined (progressive) format
     if not chosen:
         progressive = [f for f in formats if f.get("acodec") != "none" and f.get("vcodec") != "none"]
         if progressive:
             progressive.sort(key=lambda x: (x.get("height") or 0), reverse=True)
             chosen = progressive[0]
 
-    # --- Fallback
     if not chosen and formats:
         chosen = formats[0]
 
@@ -87,3 +70,4 @@ async def get_best_format_stream_url(url: str, format_id: Optional[str] = None) 
         "filesize": chosen.get("filesize") or chosen.get("filesize_approx"),
         "filename": f"{safe_title}.{ext}",
     }
+    
