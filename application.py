@@ -1,7 +1,6 @@
 # ==============================
 # SaveMedia Backend (Direct Download Mode)
-# Author: Muhammad Amir Khursheed Ahmed Khan [Ticnodeveloper]
-# Updated with GPT-5
+# Author: Muhammad Amir Khursheed Ahmed Khan [Ticnodeveloper] + GPT-5
 # ==============================
 
 import os
@@ -14,30 +13,28 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from dotenv import load_dotenv
 from downloader import extract_info, get_best_format_stream_url
+import httpx
 
 # ------------------------------
 # Load Environment Variables
 # ------------------------------
 load_dotenv()
-
 API_ALLOW_HOST = os.getenv("API_ALLOW_HOST", "savemedia.online")
 API_KEY = os.getenv("API_KEY", "")
 MAX_CONCURRENT_DOWNLOADS = int(os.getenv("MAX_CONCURRENT_DOWNLOADS", "3"))
 RATE_LIMIT_PER_MIN = int(os.getenv("RATE_LIMIT_PER_MIN", "30"))
 
 # ------------------------------
-# Initialize FastAPI App
+# Initialize FastAPI
 # ------------------------------
-application = FastAPI(title="SaveMedia Backend (Direct Mode)", version="2.0")
+application = FastAPI(title="SaveMedia Backend", version="2.1")
 
-# ✅ CORS Middleware
 application.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "https://crispy0921.blogspot.com",
         "https://savemedia.online",
-        "https://ticnotester.blogspot.com",
-        "*"  # for testing; remove in production
+        "*",  # Testing only; remove in prod
     ],
     allow_credentials=True,
     allow_methods=["*"],
@@ -45,14 +42,10 @@ application.add_middleware(
 )
 
 # ------------------------------
-# Simple Rate Limiter
+# Basic Rate Limiter
 # ------------------------------
 ip_requests: Dict[str, List[float]] = {}
 download_sem = asyncio.Semaphore(MAX_CONCURRENT_DOWNLOADS)
-
-
-class InfoRequest(BaseModel):
-    url: str
 
 
 def _client_ip(req: Request) -> str:
@@ -74,16 +67,20 @@ def rate_limit_check(client_ip: str):
 
 
 # ------------------------------
-# Root Route
+# Root
 # ------------------------------
 @application.get("/")
 async def home():
-    return {"status": "ok", "message": "SaveMedia Direct Link Backend running fine"}
+    return {"status": "ok", "message": "SaveMedia Direct Link Backend Running"}
 
 
 # ------------------------------
-# Video Info Endpoint
+# /api/info  — Metadata Fetch
 # ------------------------------
+class InfoRequest(BaseModel):
+    url: str
+
+
 @application.post("/api/info")
 async def info(req: Request, body: InfoRequest):
     client_ip = _client_ip(req)
@@ -92,30 +89,24 @@ async def info(req: Request, body: InfoRequest):
     if not url:
         raise HTTPException(status_code=400, detail="URL required")
 
-    print(f"[INFO] Fetching info for: {url}", flush=True)
     try:
         info = await extract_info(url)
-
         formats = []
         for f in info.get("formats", []):
             if f.get("acodec") in [None, "none"]:
                 continue
-
             quality = str(f.get("format_note") or f.get("height") or "Unknown")
             if quality.lower() in ["", "none", "unknown"]:
                 quality = f"{f.get('height', '')}p" if f.get("height") else "Standard"
-
             size_bytes = f.get("filesize") or f.get("filesize_approx") or 0
             size_mb = round(size_bytes / (1024 * 1024), 2) if size_bytes else None
             size_label = f"{size_mb} MB" if size_mb else "N/A"
-
             formats.append({
                 "format_id": f.get("format_id"),
                 "ext": f.get("ext"),
                 "quality": quality,
                 "filesize": size_label,
             })
-
         return JSONResponse({
             "id": info.get("id"),
             "title": info.get("title"),
@@ -131,19 +122,30 @@ async def info(req: Request, body: InfoRequest):
 
 
 # ------------------------------
-# Direct Download Link Endpoint (Smart Mode)
+# HEAD check helper
+# ------------------------------
+async def head_check(url: str, timeout: int = 8):
+    try:
+        async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
+            r = await client.head(url)
+            return {
+                "status_code": r.status_code,
+                "content_type": r.headers.get("content-type"),
+                "content_disposition": r.headers.get("content-disposition"),
+            }
+    except Exception:
+        return None
+
+
+# ------------------------------
+# /api/download — Direct Link + .bin Handling
 # ------------------------------
 @application.api_route("/api/download", methods=["GET", "POST"])
 async def download(req: Request, url: str = "", format_id: Optional[str] = None, mode: str = "json"):
-    """
-    Returns either:
-    - JSON response (for app use)
-    - 302 Redirect (for browser download) when ?mode=redirect or body.mode="redirect"
-    """
     client_ip = _client_ip(req)
     rate_limit_check(client_ip)
 
-    # Read URL and parameters
+    # read params
     if req.method == "POST":
         try:
             body = await req.json()
@@ -162,38 +164,49 @@ async def download(req: Request, url: str = "", format_id: Optional[str] = None,
 
     await download_sem.acquire()
     try:
-        print(f"[DIRECT LINK] Fetching for: {url} (format={format_id}, mode={mode})", flush=True)
+        print(f"[DOWNLOAD] {url} (format={format_id}, mode={mode})", flush=True)
         stream_info = await get_best_format_stream_url(url, format_id=format_id)
         if not stream_info or "url" not in stream_info:
-            raise HTTPException(status_code=500, detail="Cannot fetch direct media link")
+            raise HTTPException(status_code=500, detail="No direct link found")
 
         direct_url = stream_info["url"]
-        filename = stream_info["filename"]
+        filename = stream_info.get("filename") or f"media.{stream_info.get('ext','mp4')}"
 
-        # ✅ Force download if mode=redirect
+        # HEAD check
+        head = await head_check(direct_url)
+        remote_cd = head and head.get("content_disposition")
+        remote_ct = head and head.get("content_type")
+
+        # Will the remote URL trigger download?
+        likely_forces_download = bool(remote_cd) or (remote_ct and not str(remote_ct).startswith("video/"))
+
         if str(mode).lower() == "redirect":
-            response_headers = {
-                "Content-Disposition": f'attachment; filename="{filename}"',
+            # ✅ Force browser to download as .bin
+            safe_name = os.path.splitext(filename)[0] + ".bin"
+            headers = {
+                "Content-Disposition": f'attachment; filename="{safe_name}"',
                 "Cache-Control": "no-cache, no-store, must-revalidate",
                 "Pragma": "no-cache",
                 "Expires": "0",
             }
-            return RedirectResponse(
-                url=direct_url,
-                status_code=302,
-                headers=response_headers
-            )
+            if likely_forces_download:
+                return RedirectResponse(url=direct_url, status_code=302, headers=headers)
+            else:
+                return JSONResponse({
+                    "status": "manual_save",
+                    "direct_url": direct_url,
+                    "suggested_filename": safe_name,
+                    "note": "If the video plays, use Save As to download manually."
+                })
 
-        # Otherwise, return JSON
+        # JSON mode
         return JSONResponse({
             "status": "success",
             "direct_url": direct_url,
             "filename": filename,
             "ext": stream_info.get("ext"),
-            "filesize": stream_info.get("filesize"),
-            "mode": "json"
+            "filesize": stream_info.get("filesize")
         })
-
     finally:
         try:
             download_sem.release()
@@ -202,7 +215,7 @@ async def download(req: Request, url: str = "", format_id: Optional[str] = None,
 
 
 # ------------------------------
-# Run Locally or Deploy on Server
+# Uvicorn Entry Point
 # ------------------------------
 if __name__ == "__main__":
     import uvicorn
