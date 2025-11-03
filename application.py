@@ -36,7 +36,7 @@ application.add_middleware(
     allow_origins=[
         "https://crispy0921.blogspot.com",
         "https://savemedia.online",
-        "http://localhost:3000",
+        "https://ticnotester.blogspot.com",
         "*"  # for testing; remove in production
     ],
     allow_credentials=True,
