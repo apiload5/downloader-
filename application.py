@@ -197,6 +197,7 @@ async def download(req: Request, url: str = "", format_id: Optional[str] = None,
                 "Cache-Control": "no-cache, no-store, must-revalidate",
                 "Pragma": "no-cache",
                 "Expires": "0",
+                    "Content-Type": "application/octet-stream"
             }
             return RedirectResponse(url=direct_url, headers=headers, status_code=302)
 
