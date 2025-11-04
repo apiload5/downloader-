@@ -14,7 +14,7 @@ from pydantic import BaseModel
 from dotenv import load_dotenv
 from downloader import extract_info, get_best_format_stream_url
 
-# ✅ Safe FFmpeg setup (no crash on Railway)
+# ✅ Safe FFmpeg setup
 try:
     import static_ffmpeg
     try:
@@ -29,7 +29,6 @@ try:
 except ImportError:
     print("[WARN] static_ffmpeg not installed, skipping FFmpeg path setup", flush=True)
 
-# ✅ Load .env variables
 load_dotenv()
 
 API_ALLOW_HOST = os.getenv("API_ALLOW_HOST", "savemedia.online")
@@ -37,15 +36,13 @@ API_KEY = os.getenv("API_KEY", "")
 MAX_CONCURRENT_DOWNLOADS = int(os.getenv("MAX_CONCURRENT_DOWNLOADS", "3"))
 RATE_LIMIT_PER_MIN = int(os.getenv("RATE_LIMIT_PER_MIN", "30"))
 
-# ✅ FastAPI app
 application = FastAPI(title="SaveMedia Backend", version="2.0")
 
-# ✅ CORS setup
 application.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "https://crispy0921.blogspot.com",
         "https://savemedia.online",
+        "https://crispy0921.blogspot.com",
         "http://localhost:3000",
         "*"
     ],
@@ -54,18 +51,20 @@ application.add_middleware(
     allow_headers=["*"],
 )
 
-# ✅ Rate limit + concurrency control
 ip_requests: Dict[str, List[float]] = {}
 download_sem = asyncio.Semaphore(MAX_CONCURRENT_DOWNLOADS)
 
+
 class InfoRequest(BaseModel):
     url: str
+
 
 def _client_ip(req: Request) -> str:
     try:
         return req.client.host or "unknown"
     except Exception:
         return "unknown"
+
 
 def rate_limit_check(client_ip: str):
     now = time.time()
@@ -77,12 +76,12 @@ def rate_limit_check(client_ip: str):
     history.append(now)
     ip_requests[client_ip] = history
 
-# ✅ Root test
+
 @application.get("/")
 async def home():
     return {"status": "ok", "message": "SaveMedia Zero-Load Backend running fine"}
 
-# ✅ Info extractor
+
 @application.post("/api/info")
 async def info(req: Request, body: InfoRequest):
     client_ip = _client_ip(req)
@@ -119,7 +118,7 @@ async def info(req: Request, body: InfoRequest):
         print("[ERROR] info() exception:", repr(e))
         raise HTTPException(status_code=500, detail="Failed to fetch info")
 
-# ✅ Direct link provider
+
 @application.api_route("/api/download", methods=["GET", "POST"])
 async def download(req: Request, url: str = "", format_id: Optional[str] = None):
     client_ip = _client_ip(req)
@@ -155,7 +154,7 @@ async def download(req: Request, url: str = "", format_id: Optional[str] = None)
     finally:
         download_sem.release()
 
-# ✅ Redirect endpoint
+
 @application.get("/api/direct")
 async def force_download(file_url: str, filename: str = "video.mp4"):
     return RedirectResponse(
@@ -163,7 +162,7 @@ async def force_download(file_url: str, filename: str = "video.mp4"):
         headers={"Content-Disposition": f"attachment; filename={filename}"}
     )
 
-# ✅ Run (local dev mode)
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("application:application", host="0.0.0.0", port=8080, reload=False)
