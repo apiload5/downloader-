@@ -1,6 +1,8 @@
+# railway.yml
 build:
   commands:
     - pip install -r requirements.txt
 
 start:
-  command: uvicorn application:application --host 0.0.0.0 --port $PORT
+  command: uvicorn application:application --host 0.0.0.0 --port 8080
+  
