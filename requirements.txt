@@ -1,8 +1,8 @@
 fastapi
 uvicorn[standard]
 yt-dlp
-python-dotenv
 httpx
+python-dotenv
 pydantic
 python-multipart
 aiofiles
