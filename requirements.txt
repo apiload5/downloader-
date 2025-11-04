@@ -1,10 +1,10 @@
 fastapi
 uvicorn[standard]
-gunicorn
 yt-dlp
+python-dotenv
 httpx
 pydantic
-python-dotenv
 python-multipart
 aiofiles
+ffmpeg-python
 static-ffmpeg
