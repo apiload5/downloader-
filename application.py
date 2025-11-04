@@ -13,6 +13,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from dotenv import load_dotenv
 from downloader import extract_info, get_best_format_stream_url
+import static_ffmpeg
+os.environ["PATH"] += os.pathsep + static_ffmpeg.get_ffmpeg_path()
 
 load_dotenv()
 
