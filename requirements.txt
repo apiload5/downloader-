@@ -5,6 +5,6 @@ yt-dlp
 httpx
 pydantic
 python-dotenv
-ffmpeg-python
 python-multipart
 aiofiles
+static-ffmpeg
